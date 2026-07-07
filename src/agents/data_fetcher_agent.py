@@ -11,11 +11,14 @@ Lern-Notiz: Das ist der "Wissens-Beschaffer" im Team. Während der Triage-Agent
 nur fragt "Was ist das Problem?", fragt dieser Agent "Was wissen wir dazu?"
 """
 
-from src.tools.llm import get_llm
+import logging
+from src.tools.llm import get_llm, call_llm_safe
 from src.tools.db_tools import (
     query_customer, query_competitor_prices,
     query_kunden_historie,
 )
+
+logger = logging.getLogger(__name__)
 
 
 def extract_product(nachricht: str) -> str:
@@ -29,9 +32,11 @@ If no specific product is mentioned, just return "Cloud".
 
 Ticket: {nachricht[:500]}"""
 
-    llm = get_llm(temperature=0.0)  # ← 0.0 = immer die gleiche Antwort bei gleicher Frage
-    resp = llm.invoke(prompt)
-    return resp.content.strip().rstrip(".")
+    result = call_llm_safe(prompt, temperature=0.0)
+    if result:
+        return result.strip().rstrip(".")
+    logger.warning("extract_product: LLM-Aufruf fehlgeschlagen, verwende 'Cloud'")
+    return "Cloud"
 
 
 def run_data_fetcher(classification: str, tickets: list) -> dict:
@@ -54,32 +59,42 @@ def run_data_fetcher(classification: str, tickets: list) -> dict:
     collected = {}
 
     if not tickets:
-        # Keine Tickets da → Fehler zurückgeben
         return {"error": "Keine offenen Tickets gefunden"}
 
     ticket = tickets[0]
-    kunden_id = ticket.get("kunden_id", 1)  # ← Hier holen wir die Kunden-ID
+    kunden_id = ticket.get("kunden_id")
+    if not kunden_id:
+        logger.warning("Keine Kunden-ID im Ticket, überspringe Data-Fetching")
+        return {"error": "Keine Kunden-ID im Ticket"}
 
     # ─── Stammdaten immer holen (Name, Email, Vertragstyp, Status) ───
-    kunde = query_customer(kunden_id)
-    collected["kunde"] = kunde
+    try:
+        kunde = query_customer(kunden_id)
+        collected["kunde"] = kunde
+    except Exception as e:
+        logger.error(f"Fehler beim Laden der Kundendaten (ID {kunden_id}): {e}")
+        collected["kunde"] = {"error": f"Kundendaten nicht verfügbar: {e}"}
 
     # ─── Je nach Klassifikation: gezielt mehr Daten ───
     if classification == "preisanfrage":
-        # Beispiel: "Was kostet Cloud-Speicher Pro bei der Konkurrenz?"
-        produkt = extract_product(ticket.get("nachricht", ""))
-        preise = query_competitor_prices(produkt)
-        collected["preis_vergleich"] = preise[:5]  # max 5 Ergebnisse
-        collected["produkt_name"] = produkt
+        try:
+            produkt = extract_product(ticket.get("nachricht", ""))
+            preise = query_competitor_prices(produkt)
+            collected["preis_vergleich"] = preise[:5]
+            collected["produkt_name"] = produkt
+        except Exception as e:
+            logger.error(f"Fehler beim Preisvergleich: {e}")
+            collected["preis_vergleich"] = []
 
     elif classification in ("beschwerde", "kuendigung"):
-        # Bei Beschwerde/Kündigung: Historie checken
-        # Wie viele Bestellungen? Welche Tickets gab es schon?
-        historie = query_kunden_historie(kunden_id)
-        collected["historie"] = historie
+        try:
+            historie = query_kunden_historie(kunden_id)
+            collected["historie"] = historie
+        except Exception as e:
+            logger.error(f"Fehler beim Laden der Kunden-Historie: {e}")
+            collected["historie"] = {"orders": [], "tickets": []}
 
     else:  # sonstiges
-        # Nur Basis-Daten reichen
         pass
 
     return collected

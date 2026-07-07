@@ -4,7 +4,10 @@ Triage-Agent (Agent 1) — Klassifiziert eingehende Tickets via LLM
 Mögliche Klassen: "beschwerde", "kuendigung", "preisanfrage", "sonstiges"
 """
 
-from src.tools.llm import get_llm
+import logging
+from src.tools.llm import call_llm_safe
+
+logger = logging.getLogger(__name__)
 
 KLASSEN = ["beschwerde", "kuendigung", "preisanfrage", "sonstiges"]
 
@@ -28,15 +31,18 @@ def classify_ticket(betreff: str, nachricht: str) -> str:
         betreff=betreff,
         nachricht=nachricht[:600],
     )
-    llm = get_llm(temperature=0.0)
-    resp = llm.invoke(prompt)
-    result = resp.content.strip().lower().rstrip(".")
+    result = call_llm_safe(prompt, temperature=0.0)
+    if not result:
+        logger.warning("LLM-Aufruf fehlgeschlagen → fallback sonstiges")
+        return "sonstiges"
+
+    result = result.strip().lower().rstrip(".")
 
     # Falls LLM was anderes zurückgibt
     for k in KLASSEN:
         if k in result:
             return k
-    print(f"  ⚠️ Unerwartete Antwort: '{result}' → fallback sonstiges")
+    logger.warning(f"Unerwartete Antwort: '{result}' → fallback sonstiges")
     return "sonstiges"
 
 

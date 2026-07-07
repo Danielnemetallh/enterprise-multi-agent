@@ -2,14 +2,9 @@
 Tests für den Data-Fetcher Agent — sammelt Daten je nach Klassifikation.
 LLM-Aufrufe (extract_product) werden gemockt, DB-Zugriffe sind echt.
 """
-from unittest.mock import patch, MagicMock
+from unittest.mock import patch
 import pytest
 from src.agents.data_fetcher_agent import run_data_fetcher
-
-
-class MockLLMResponse:
-    def __init__(self, content: str):
-        self.content = content
 
 
 @pytest.fixture
@@ -23,11 +18,9 @@ def mock_tickets():
 
 
 class TestRunDataFetcher:
-    @patch("src.agents.data_fetcher_agent.get_llm")
-    def test_preisanfrage_holt_preise_und_kunde(self, mock_get_llm, mock_tickets):
-        mock_llm = MagicMock()
-        mock_llm.invoke.return_value = MockLLMResponse("Cloud-Speicher Pro")
-        mock_get_llm.return_value = mock_llm
+    @patch("src.agents.data_fetcher_agent.call_llm_safe")
+    def test_preisanfrage_holt_preise_und_kunde(self, mock_llm, mock_tickets):
+        mock_llm.return_value = "Cloud-Speicher Pro"
 
         result = run_data_fetcher("preisanfrage", mock_tickets)
         assert "kunde" in result

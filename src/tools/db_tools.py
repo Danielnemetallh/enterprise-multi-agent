@@ -15,9 +15,12 @@ Erzeugt: data/mock_customers.db
 
 import sqlite3
 import os
+import logging
 from datetime import datetime, timedelta
 from random import randint, choice, uniform
 from faker import Faker
+
+logger = logging.getLogger(__name__)
 
 fake = Faker("de_DE")
 
@@ -264,7 +267,7 @@ def generate_mock_data():
 def create_database(force=False):
     exists = os.path.exists(DB_PATH)
     if exists and not force:
-        print(f"ℹ️  DB existiert bereits: {DB_PATH}")
+        logger.info(f"DB existiert bereits: {DB_PATH}")
         return False
 
     os.makedirs(os.path.dirname(DB_PATH), exist_ok=True)
@@ -285,19 +288,27 @@ def create_database(force=False):
 
     conn.commit()
     conn.close()
-    print(f"✅ Mock-DB: {DB_PATH}")
-    print(f"   📊 {len(data['customers'])} Kunden")
-    print(f"   📊 {len(data['products'])} Produkte")
-    print(f"   📊 {len(data['competitor_prices'])} Konkurrenz-Preise")
-    print(f"   📊 {len(data['support_tickets'])} Support-Tickets (realistische Texte)")
-    print(f"   📊 {len(data['orders'])} Bestellungen")
+    logger.info(f"Mock-DB erstellt: {DB_PATH}")
+    logger.info(f"  {len(data['customers'])} Kunden, {len(data['products'])} Produkte")
+    logger.info(f"  {len(data['competitor_prices'])} Konkurrenz-Preise")
+    logger.info(f"  {len(data['support_tickets'])} Support-Tickets, {len(data['orders'])} Bestellungen")
     return True
 
 
 # ─────────────────────── QUERIES FÜR AGENTEN ───────────────────────
 
+def ensure_db():
+    """Erstellt die DB automatisch, falls sie nicht existiert."""
+    if not os.path.exists(DB_PATH):
+        logger.warning(f"DB nicht gefunden, erstelle neue unter {DB_PATH}")
+        create_database(force=True)
+        return True
+    return False
+
+
 def get_conn():
-    """Öffnet eine neue SQLite-Verbindung (ohne Autocommit-Wrapper)."""
+    """Öffnet eine neue SQLite-Verbindung. Erstellt DB bei Bedarf."""
+    ensure_db()
     return sqlite3.connect(DB_PATH)
 
 
@@ -305,6 +316,7 @@ class db_connection:
     """Context-Manager für DB-Verbindungen — schließt automatisch."""
 
     def __enter__(self):
+        ensure_db()
         self.conn = sqlite3.connect(DB_PATH)
         return self.conn
 
@@ -313,71 +325,90 @@ class db_connection:
 
 
 def query_customer(kunden_id: int) -> dict:
-    with db_connection() as conn:
-        cur = conn.cursor()
-        cur.execute("SELECT * FROM customers WHERE id = ?", (kunden_id,))
-        row = cur.fetchone()
-    if row:
-        return {
-            "id": row[0], "name": row[1], "email": row[2],
-            "phone": row[3], "status": row[4], "vertragstyp": row[5],
-            "beitritt": row[6], "kundenseit": row[7],
-        }
-    return {"error": "Kunde nicht gefunden"}
+    try:
+        with db_connection() as conn:
+            cur = conn.cursor()
+            cur.execute("SELECT * FROM customers WHERE id = ?", (kunden_id,))
+            row = cur.fetchone()
+        if row:
+            return {
+                "id": row[0], "name": row[1], "email": row[2],
+                "phone": row[3], "status": row[4], "vertragstyp": row[5],
+                "beitritt": row[6], "kundenseit": row[7],
+            }
+        return {"error": "Kunde nicht gefunden"}
+    except sqlite3.DatabaseError as e:
+        logger.error(f"DB-Fehler bei query_customer({kunden_id}): {e}")
+        return {"error": f"Datenbank-Fehler: {e}"}
 
 
 def query_competitor_prices(produkt_name: str) -> list:
-    with db_connection() as conn:
-        cur = conn.cursor()
-        cur.execute(
-            "SELECT anbieter, preis, stand FROM competitor_prices WHERE produkt LIKE ?",
-            (f"%{produkt_name}%",)
-        )
-        rows = cur.fetchall()
-    return [{"anbieter": r[0], "preis": r[1], "stand": r[2]} for r in rows]
+    try:
+        with db_connection() as conn:
+            cur = conn.cursor()
+            cur.execute(
+                "SELECT anbieter, preis, stand FROM competitor_prices WHERE produkt LIKE ?",
+                (f"%{produkt_name}%",)
+            )
+            rows = cur.fetchall()
+        return [{"anbieter": r[0], "preis": r[1], "stand": r[2]} for r in rows]
+    except sqlite3.DatabaseError as e:
+        logger.error(f"DB-Fehler bei query_competitor_prices: {e}")
+        return []
 
 
 def query_open_tickets(limit: int = 30) -> list:
-    with db_connection() as conn:
-        cur = conn.cursor()
-        cur.execute("""
-            SELECT t.id, t.kunden_id, t.typ, t.betreff, t.nachricht, c.name, c.email
-            FROM support_tickets t
-            JOIN customers c ON t.kunden_id = c.id
-            WHERE t.status != 'erledigt'
-            LIMIT ?
-        """, (limit,))
-        rows = cur.fetchall()
-    return [{
-        "id": r[0], "kunden_id": r[1], "typ": r[2], "betreff": r[3],
-        "nachricht": r[4], "kunde": r[5], "email": r[6]
-    } for r in rows]
+    try:
+        with db_connection() as conn:
+            cur = conn.cursor()
+            cur.execute("""
+                SELECT t.id, t.kunden_id, t.typ, t.betreff, t.nachricht, c.name, c.email
+                FROM support_tickets t
+                JOIN customers c ON t.kunden_id = c.id
+                WHERE t.status != 'erledigt'
+                LIMIT ?
+            """, (limit,))
+            rows = cur.fetchall()
+        return [{
+            "id": r[0], "kunden_id": r[1], "typ": r[2], "betreff": r[3],
+            "nachricht": r[4], "kunde": r[5], "email": r[6]
+        } for r in rows]
+    except sqlite3.DatabaseError as e:
+        logger.error(f"DB-Fehler bei query_open_tickets: {e}")
+        return []
 
 
 def query_kunden_historie(kunden_id: int) -> dict:
-    with db_connection() as conn:
-        cur = conn.cursor()
-        cur.execute("""
-            SELECT p.name, o.menge, o.gesamtpreis, o.datum
-            FROM orders o
-            JOIN products p ON o.produkt_id = p.id
-            WHERE o.kunden_id = ?
-            ORDER BY o.datum DESC
-            LIMIT 10
-        """, (kunden_id,))
-        orders = [{"produkt": r[0], "menge": r[1], "preis": r[2], "datum": r[3]} for r in cur.fetchall()]
-        cur.execute("""
-            SELECT typ, betreff, status, erstellt
-            FROM support_tickets
-            WHERE kunden_id = ?
-            ORDER BY erstellt DESC
-            LIMIT 5
-        """, (kunden_id,))
-        tickets = [{"typ": r[0], "betreff": r[1], "status": r[2], "datum": r[3]} for r in cur.fetchall()]
-    return {"orders": orders, "tickets": tickets}
+    try:
+        with db_connection() as conn:
+            cur = conn.cursor()
+            cur.execute("""
+                SELECT p.name, o.menge, o.gesamtpreis, o.datum
+                FROM orders o
+                JOIN products p ON o.produkt_id = p.id
+                WHERE o.kunden_id = ?
+                ORDER BY o.datum DESC
+                LIMIT 10
+            """, (kunden_id,))
+            orders = [{"produkt": r[0], "menge": r[1], "preis": r[2], "datum": r[3]} for r in cur.fetchall()]
+            cur.execute("""
+                SELECT typ, betreff, status, erstellt
+                FROM support_tickets
+                WHERE kunden_id = ?
+                ORDER BY erstellt DESC
+                LIMIT 5
+            """, (kunden_id,))
+            tickets = [{"typ": r[0], "betreff": r[1], "status": r[2], "datum": r[3]} for r in cur.fetchall()]
+        return {"orders": orders, "tickets": tickets}
+    except sqlite3.DatabaseError as e:
+        logger.error(f"DB-Fehler bei query_kunden_historie({kunden_id}): {e}")
+        return {"orders": [], "tickets": []}
 
 
 if __name__ == "__main__":
+    from src.tools.logger import setup_logging
+    setup_logging()
+
     import sys
     force = "--force" in sys.argv
     create_database(force=force)

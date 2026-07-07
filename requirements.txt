@@ -6,4 +6,4 @@ beautifulsoup4>=4.15
 requests>=2.33
 pydantic>=2.13
 python-dotenv>=1.2
-dotenv
+faker>=33

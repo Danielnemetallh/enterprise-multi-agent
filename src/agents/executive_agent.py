@@ -11,7 +11,10 @@ Lern-Notiz: Das ist der "Manager" im Team. Er kriegt alle Infos (Was ist das Pro
 """
 
 import json
-from src.tools.llm import get_llm, extract_json
+import logging
+from src.tools.llm import call_llm_safe, extract_json
+
+logger = logging.getLogger(__name__)
 
 
 PROMPT_TEMPLATE = """You are an executive agent for a customer support system.
@@ -90,9 +93,16 @@ def run_executive(classification: str, collected_data: dict) -> dict:
         collected_data=json.dumps(collected_summary, indent=2, ensure_ascii=False),
     )
 
-    llm = get_llm(temperature=0.0)
-    resp = llm.invoke(prompt)
-    result = resp.content.strip()
+    result = call_llm_safe(prompt, temperature=0.0)
+    if not result:
+        logger.warning("Executive: LLM-Aufruf fehlgeschlagen, verwende Fallback")
+        return {
+            "typ": "info",
+            "wert": 0,
+            "betreff": "Ihre Anfrage",
+            "nachricht": "Wir werden uns um Ihr Anliegen kümmern.",
+            "kritisch": False,
+        }
 
     # JSON aus der Antwort extrahieren
     try:
@@ -105,13 +115,12 @@ def run_executive(classification: str, collected_data: dict) -> dict:
         action.setdefault("nachricht", "Wir werden uns um Ihr Anliegen kümmern.")
         action.setdefault("kritisch", action.get("wert", 0) > 15)
 
-        print(f"  🔧 Executive: {action['typ']} | {action.get('betreff', '')[:50]} | Wert: {action['wert']}% | Kritisch: {action['kritisch']}")
+        logger.info(f"Executive: {action['typ']} | {action.get('betreff', '')[:50]} | Wert: {action['wert']}% | Kritisch: {action['kritisch']}")
         return action
 
     except (json.JSONDecodeError, IndexError) as e:
-        # Fallback: Wenn DeepSeek kein gültiges JSON zurückgibt
-        print(f"  ⚠️ Executive: Konnte Antwort nicht parsen: {e}")
-        print(f"     Antwort war: {result[:200]}")
+        logger.warning(f"Executive: Konnte Antwort nicht parsen: {e}")
+        logger.debug(f"Antwort war: {result[:200]}")
         return {
             "typ": "info",
             "wert": 0,

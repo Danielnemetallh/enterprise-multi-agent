@@ -13,6 +13,7 @@ import sys, os
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
 
 import json
+import logging
 from typing import Literal, TypedDict
 from langgraph.graph import StateGraph, END
 
@@ -21,6 +22,8 @@ from src.agents.data_fetcher_agent import run_data_fetcher
 from src.agents.executive_agent import run_executive
 from src.tools.llm import get_llm, extract_json
 from src.tools.db_tools import query_open_tickets
+
+logger = logging.getLogger(__name__)
 
 
 # ─────────────────────────────── S T A T E ───────────────────────────────
@@ -39,35 +42,53 @@ class AgentState(TypedDict):
 
 def triage_agent(state: AgentState) -> AgentState:
     """Agent 1: Klassifiziert den Eingang via DeepSeek."""
-    tickets = query_open_tickets()
-    if not tickets:
+    try:
+        tickets = query_open_tickets()
+        if not tickets:
+            logger.warning("Keine offenen Tickets gefunden")
+            return {**state, "classification": "sonstiges", "ticket": None}
+
+        # Nutze state["input"] (z.B. Ticket-ID) oder falle auf erstes Ticket zurück
+        ticket = tickets[0]
+        if state["input"]:
+            for t in tickets:
+                if str(t["id"]) == state["input"].strip():
+                    ticket = t
+                    break
+
+        classification = classify_ticket(ticket["betreff"], ticket["nachricht"])
+        logger.info(f"Triage: [{classification}] #{ticket['id']} {ticket['betreff']}")
+        return {**state, "classification": classification, "ticket": ticket}
+    except Exception as e:
+        logger.error(f"Triage-Agent Fehler: {e}")
         return {**state, "classification": "sonstiges", "ticket": None}
-
-    # Nutze state["input"] (z.B. Ticket-ID) oder falle auf erstes Ticket zurück
-    ticket = tickets[0]
-    if state["input"]:
-        for t in tickets:
-            if str(t["id"]) == state["input"].strip():
-                ticket = t
-                break
-
-    classification = classify_ticket(ticket["betreff"], ticket["nachricht"])
-    print(f"  🔍 Triage: [{classification}] #{ticket['id']} {ticket['betreff']}")
-    return {**state, "classification": classification, "ticket": ticket}
 
 
 def data_fetcher(state: AgentState) -> AgentState:
     """Agent 2: Holt Daten aus DB — je nach Klassifikation (via Data-Fetcher Agent)."""
-    tickets = [state["ticket"]] if state.get("ticket") else query_open_tickets()
-    collected = run_data_fetcher(state["classification"], tickets)
-    print(f"  📊 Data-Fetcher: {len(collected)} Datenkategorien gesammelt")
-    return {**state, "collected_data": collected}
+    try:
+        tickets = [state["ticket"]] if state.get("ticket") else query_open_tickets()
+        collected = run_data_fetcher(state["classification"], tickets)
+        logger.info(f"Data-Fetcher: {len(collected)} Datenkategorien gesammelt")
+        return {**state, "collected_data": collected}
+    except Exception as e:
+        logger.error(f"Data-Fetcher Fehler: {e}")
+        return {**state, "collected_data": {}}
 
 
 def executive_agent(state: AgentState) -> AgentState:
     """Agent 3: Erstellt Lösungsvorschlag (via Executive-Agent / DeepSeek)."""
-    action = run_executive(state["classification"], state["collected_data"])
-    return {**state, "proposed_action": action}
+    try:
+        action = run_executive(state["classification"], state["collected_data"])
+        return {**state, "proposed_action": action}
+    except Exception as e:
+        logger.error(f"Executive-Agent Fehler: {e}")
+        return {**state, "proposed_action": {
+            "typ": "info", "wert": 0,
+            "betreff": "Ihre Anfrage",
+            "nachricht": "Wir konnten Ihre Anfrage leider nicht bearbeiten. Bitte kontaktieren Sie uns erneut.",
+            "kritisch": False,
+        }}
 
 
 def human_review(state: AgentState) -> AgentState:
@@ -87,12 +108,12 @@ def human_review(state: AgentState) -> AgentState:
 
         if inp in ("ja", "yes"):
             state["approval"] = "approved"
-            print(f" → ✅ Freigegeben")
+            logger.info("Aktion freigegeben")
             return state
 
         elif inp in ("nein", "no"):
             state["approval"] = "rejected"
-            print(f" → ❌ Abgelehnt")
+            logger.info("Aktion abgelehnt")
             return state
 
         elif inp == "eigen":
@@ -111,10 +132,9 @@ Respond with a JSON object:
     "nachricht": "<alternative response in German, max 2 Sätze>",
     "kritisch": true/false
 }}"""
-            llm = get_llm(temperature=0.3)  # etwas Kreativität
-            resp = llm.invoke(prompt)
-
             try:
+                llm = get_llm(temperature=0.3)
+                resp = llm.invoke(prompt)
                 new_action = extract_json(resp.content)
                 new_action.setdefault("typ", "info")
                 new_action.setdefault("wert", 0)
@@ -123,11 +143,11 @@ Respond with a JSON object:
                 new_action.setdefault("kritisch", new_action.get("wert", 0) > 15)
 
                 state["proposed_action"] = new_action
-                print(f"  → Neuer Vorschlag: {new_action['typ']} | {new_action.get('betreff', '?')}")
-                # while-Schleife wiederholt sich → Benutzer sieht neuen Vorschlag
+                logger.info(f"Neuer Alternativ-Vorschlag: {new_action['typ']} | {new_action.get('betreff', '?')}")
 
-            except (json.JSONDecodeError, IndexError) as e:
-                print(f"  ⚠️ Konnte Alternativ-Vorschlag nicht parsen: {e}")
+            except Exception as e:
+                logger.error(f"Alternativ-Vorschlag fehlgeschlagen: {e}")
+                print(f"  ⚠️ Konnte keinen Alternativ-Vorschlag erstellen: {e}")
                 print("  → Bitte nochmal eingeben (ja/nein/eigen)")
         else:
             print("  ⚠️ Bitte 'ja', 'nein' oder 'eigen' eingeben.")
@@ -139,22 +159,18 @@ def execute_action(state: AgentState) -> AgentState:
     kunde = state["collected_data"].get("kunde", {})
 
     if state["approval"] == "rejected":
-        print(f"\n  ❌ Aktion abgelehnt")
-        print(f" ─────────────────────────────────────")
-        print(f"  Typ:     {action.get('typ', '?')}")
-        print(f"  Rabatt:  {action.get('wert', 0)}%")
-        print(f"  Kunde:   {kunde.get('name', '?')}")
-        print(f"  ─────────────────────────────────────")
+        logger.warning(
+            f"Aktion abgelehnt | Typ: {action.get('typ', '?')} | "
+            f"Rabatt: {action.get('wert', 0)}% | Kunde: {kunde.get('name', '?')}"
+        )
         return state
 
-    print(f"\n  ✅ AKTION AUSGEFÜHRT")
-    print(f"  ─────────────────────────────────────")
-    print(f"  Typ:     {action.get('typ', '?')}")
-    print(f"  Rabatt:  {action.get('wert', 0)}%")
-    print(f"  Kunde:   {kunde.get('name', '?')}")
-    print(f"  Status:  {kunde.get('status', '?')}")
-    print(f"  ─────────────────────────────────────")
-    print(f"  📨 {action.get('nachricht', '?')}")
+    logger.info(
+        f"Aktion ausgeführt | Typ: {action.get('typ', '?')} | "
+        f"Rabatt: {action.get('wert', 0)}% | "
+        f"Kunde: {kunde.get('name', '?')} ({kunde.get('status', '?')})"
+    )
+    logger.info(f"Nachricht: {action.get('nachricht', '?')}")
     return state
 
 
@@ -213,16 +229,21 @@ def build_graph() -> StateGraph:
 # ─────────────────────────────── M A I N ───────────────────────────────
 
 if __name__ == "__main__":
-    graph = build_graph()
-    print("✅ LangGraph compiled!\n")
+    from src.tools.logger import setup_logging
+    setup_logging()
 
-    # Testlauf
-    result = graph.invoke({
-        "input": "",
-        "ticket": None,
-        "classification": "",
-        "collected_data": {},
-        "proposed_action": {},
-        "approval": "pending",
-    })
-    print(f"\n📊 Final State: {result}")
+    graph = build_graph()
+    logger.info("LangGraph compiled!")
+
+    try:
+        result = graph.invoke({
+            "input": "",
+            "ticket": None,
+            "classification": "",
+            "collected_data": {},
+            "proposed_action": {},
+            "approval": "pending",
+        })
+        logger.info("Graph-Durchlauf abgeschlossen")
+    except Exception as e:
+        logger.error(f"Graph-Durchlauf fehlgeschlagen: {e}")
