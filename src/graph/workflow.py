@@ -3,12 +3,11 @@ Enterprise Multi-Agent System — LangGraph Workflow
 ====================================================
 Nodes:   triage → data_fetcher / executive → human_review → execute
 Edges:   conditional routing via router() & needs_approval()
-State:   AgentState (TypedDict)
+State:   SINGLE-TICKET — 1 Ticket pro Durchlauf
 LLM:     DeepSeek (via src.tools.llm)
 DB:      SQLite Mock-DB (via src.tools.db_tools)
 """
 
-# Projekt-Root zum sys.path hinzufügen (für direkte Ausführung)
 import sys, os
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
 
@@ -29,32 +28,36 @@ logger = logging.getLogger(__name__)
 # ─────────────────────────────── S T A T E ───────────────────────────────
 
 class AgentState(TypedDict):
-    """Gemeinsamer State, der durch den gesamten Graphen fließt."""
-    input: str                 # Original-Eingabe (Mail / Task)
-    ticket: dict | None        # Aktuelles Ticket (vom Triage gesetzt)
+    """State für SINGLE-TICKET: 1 Ticket pro Graph-Durchlauf."""
+    input: str                 # Ticket-ID (optional) — z.B. "28"
+    ticket: dict | None        # Das aktuell verarbeitete Ticket
     classification: str        # "beschwerde" | "kuendigung" | "preisanfrage" | "sonstiges"
-    collected_data: dict       # Daten aus DB / Scraping
-    proposed_action: dict      # Lösungsvorschlag vom Executive-Agent
+    collected_data: dict       # Daten aus DB für DIESES Ticket
+    proposed_action: dict      # Lösungsvorschlag vom Executive
     approval: str              # "pending" | "approved" | "rejected"
 
 
 # ─────────────────────────────── N O D E S ───────────────────────────────
 
 def triage_agent(state: AgentState) -> AgentState:
-    """Agent 1: Klassifiziert den Eingang via DeepSeek."""
+    """Agent 1: Wählt EIN Ticket aus und klassifiziert es via DeepSeek."""
     try:
         tickets = query_open_tickets()
         if not tickets:
             logger.warning("Keine offenen Tickets gefunden")
             return {**state, "classification": "sonstiges", "ticket": None}
 
-        # Nutze state["input"] (z.B. Ticket-ID) oder falle auf erstes Ticket zurück
-        ticket = tickets[0]
+        # Ticket-Auswahl: per input(ID) oder Priorität
         if state["input"]:
-            for t in tickets:
-                if str(t["id"]) == state["input"].strip():
-                    ticket = t
-                    break
+            # Exakte Ticket-ID (auch wenn's erledigt ist)
+            ticket = next(
+                (t for t in tickets if str(t["id"]) == state["input"].strip()),
+                tickets[0]
+            )
+        else:
+            # Priorität: kuendigung > beschwerde > preisanfrage > sonstiges
+            priority = {"kuendigung": 0, "beschwerde": 1, "preisanfrage": 2, "sonstiges": 3}
+            ticket = min(tickets, key=lambda t: priority.get(t.get("typ", "sonstiges"), 99))
 
         classification = classify_ticket(ticket["betreff"], ticket["nachricht"])
         logger.info(f"Triage: [{classification}] #{ticket['id']} {ticket['betreff']}")
@@ -195,7 +198,7 @@ def needs_approval(state: AgentState) -> Literal["human_review", "execute_action
 # ─────────────────────── G R A P H   B A U E N ───────────────────────
 
 def build_graph() -> StateGraph:
-    """Erstellt den LangGraph-Graphen."""
+    """Erstellt den LangGraph-Graphen (Single-Ticket)."""
     workflow = StateGraph(AgentState)
 
     # Nodes registrieren
@@ -232,8 +235,13 @@ if __name__ == "__main__":
     from src.tools.logger import setup_logging
     setup_logging()
 
+    # httpx-Logs unterdrücken (sonst sieht der Nutzer jeden API-Call)
+    logging.getLogger("httpx").setLevel(logging.WARNING)
+    logging.getLogger("openai").setLevel(logging.WARNING)
+    logging.getLogger("httpcore").setLevel(logging.WARNING)
+
     graph = build_graph()
-    logger.info("LangGraph compiled!")
+    logger.info("LangGraph compiled! (Single-Ticket-Modus)")
 
     try:
         result = graph.invoke({
@@ -245,5 +253,26 @@ if __name__ == "__main__":
             "approval": "pending",
         })
         logger.info("Graph-Durchlauf abgeschlossen")
+
+        ticket = result.get("ticket")
+        action = result.get("proposed_action", {})
+        kunde = result.get("collected_data", {}).get("kunde", {})
+
+        print("\n" + "=" * 60)
+        print(" 📋 ABSCHLUSSBERICHT")
+        print("=" * 60)
+        if ticket:
+            print(f"  Ticket #{ticket['id']} [{result.get('classification', '?')}]")
+            print(f"  Kunde: {kunde.get('name', '?')} ({kunde.get('status', '?')})")
+            print(f"  Betreff: {ticket['betreff']}")
+            print(f"  Status: {'✅ Genehmigt' if result.get('approval') == 'approved' else '❌ Abgelehnt'}")
+            print(f"  Aktion: {action.get('typ', '?')} | Rabatt: {action.get('wert', 0)}%")
+            print(f"  Antwort: {action.get('nachricht', '')}")
+        else:
+            print("  Kein Ticket verarbeitet.")
+        print()
+
     except Exception as e:
         logger.error(f"Graph-Durchlauf fehlgeschlagen: {e}")
+        import traceback
+        traceback.print_exc()
