@@ -1,10 +1,10 @@
 """
 Executive Agent (Agent 3) — Erstellt Lösungsvorschläge per DeepSeek
 ====================================================================
-Nimmt die gesammelten Daten und entscheidet:
+Nimmt die gesammelten Daten + Ticket und entscheidet:
 - Welcher Rabatt ist angemessen?
 - Soll die Aktion automatisch ausgeführt werden oder braucht es Freigabe?
-- Formuliert eine Antwort an den Kunden
+- Formuliert eine Antwort an den Kunden (mit Bezug zu seinem konkreten Anliegen)
 
 Lern-Notiz: Das ist der "Manager" im Team. Er kriegt alle Infos (Was ist das Problem?
 + Was wissen wir dazu?) und sagt dann: "So sollten wir reagieren."
@@ -18,7 +18,8 @@ logger = logging.getLogger(__name__)
 
 
 PROMPT_TEMPLATE = """You are an executive agent for a customer support system.
-Based on the following data, decide on the best action.
+Based on the following data, decide on the best action. Write a response that
+references the customer's ACTUAL issue — be specific, not generic.
 
 Classification: {classification}
 
@@ -27,6 +28,10 @@ Customer Info:
 - Status: {kunde_status}
 - Vertrag: {kunde_vertrag}
 
+Customer Ticket:
+- Subject: {ticket_betreff}
+- Message: {ticket_nachricht}
+
 Additional Data:
 {collected_data}
 
@@ -34,8 +39,8 @@ Respond with a JSON object (ONLY JSON, no other text):
 {{
     "typ": "angebot|entschuldigung|info|storno",
     "wert": <number 0-30>,
-    "betreff": "<short subject in German>",
-    "nachricht": "<response message to customer in German>",
+    "betreff": "<short subject in German, referencing the customer's issue>",
+    "nachricht": "<response message to customer in German, max 2 sentences, reference their specific issue>",
     "kritisch": true/false
 }}
 
@@ -44,7 +49,7 @@ Rules:
          "info" für allgemeine Infos, "storno" für Kündigungen
 - "wert": Rabatt in Prozent (0 = kein Rabatt). Nur >0 wenn "typ" == "angebot"
 - "kritisch": true wenn wert > 15, oder bei Kündigungen/Kulanz
-- "nachricht": max 2 Sätze, professionell und freundlich
+- "nachricht": max 2 Sätze, professionell und freundlich, BEZUG zur Kundenanfrage
 
 Examples:
 - Kunde fragt nach Preis → angebot, wert 10-20, kritisch wenn >15
@@ -56,28 +61,35 @@ Examples:
 
 def run_executive(classification: str, collected_data: dict) -> dict:
     """
-    Hauptfunktion: Erstellt einen Lösungsvorschlag per DeepSeek.
+    Erstellt einen Lösungsvorschlag per DeepSeek für EIN Ticket.
 
     Das ist der wichtigste Agent im System – er entscheidet WAS passieren soll.
     Der Data-Fetcher liefert nur die Informationen, aber der Executive
     bestimmt die Aktion.
 
+    Der Prompt enthält jetzt ticket_betreff und ticket_nachricht,
+    damit die Antwort kundenbezogen ist (nicht generisch).
+
     Parameter:
     - classification: Die Ticket-Klasse vom Triage-Agent
-    - collected_data: Alle Daten vom Data-Fetcher
+    - collected_data: Alle Daten vom Data-Fetcher (inkl. "ticket"-Key)
 
     Rückgabe:
     - dict mit: typ, wert, betreff, nachricht, kritisch
     """
+    ticket_info = collected_data.get("ticket", {})
+    return _build_action(classification, collected_data, ticket_info)
 
-    # Kunde aus den gesammelten Daten holen
+
+def _build_action(classification: str, collected_data: dict, ticket: dict) -> dict:
+    """Erstellt Lösungsvorschlag für EIN Ticket (intern)."""
     kunde = collected_data.get("kunde", {})
 
     # Daten für den Prompt aufbereiten (ohne riesige Dicts)
     collected_summary = {}
     for key, value in collected_data.items():
-        if key == "kunde":
-            continue  # Den haben wir schon extra
+        if key in ("kunde", "ticket"):
+            continue  # Haben wir schon extra
         if isinstance(value, list):
             collected_summary[key] = f"[{len(value)} Einträge]"
             if value:
@@ -90,6 +102,8 @@ def run_executive(classification: str, collected_data: dict) -> dict:
         kunde_name=kunde.get("name", "Unbekannt"),
         kunde_status=kunde.get("status", "Unbekannt"),
         kunde_vertrag=kunde.get("vertragstyp", "Unbekannt"),
+        ticket_betreff=ticket.get("betreff", "(kein Betreff)"),
+        ticket_nachricht=(ticket.get("nachricht", "") or "")[:400],
         collected_data=json.dumps(collected_summary, indent=2, ensure_ascii=False),
     )
 
@@ -128,3 +142,6 @@ def run_executive(classification: str, collected_data: dict) -> dict:
             "nachricht": "Wir werden uns um Ihr Anliegen kümmern.",
             "kritisch": False,
         }
+
+
+
