@@ -15,11 +15,15 @@ python src/tools/llm.py                             # quick LLM smoke-test
 
 ## Architecture
 
-- `src/graph/workflow.py` — compiled `StateGraph` (entrypoint, conditional edges, 5 nodes)
-- `src/agents/*.py` — 3 agents: `triage_agent` (LLM classification), `data_fetcher_agent` (DB queries), `executive_agent` (LLM decision)
+- `src/graph/workflow.py` — compiled `StateGraph` (entrypoint, conditional edges via `router()`, 5 nodes)
+- `src/agents/*.py` — 3 agents: `triage_agent` (LLM classification eines Tickets), `data_fetcher_agent` (DB queries per Ticket), `executive_agent` (LLM decision inkl. Ticket-Text im Prompt für kundenbezogene Antwort)
 - `src/tools/db_tools.py` — SQLite schema + mock data generator + query functions
 - `src/tools/llm.py` — `get_llm()` returns `ChatOpenAI` pointed at DeepSeek
-- HITL is console-based (`input()` in `human_review` node) — no Slack/Gmail wired yet
+- **Single-Ticket**: 1 Ticket pro Graph-Invocation. Priorität: kuendigung > beschwerde > preisanfrage > sonstiges
+- **Conditional-Routing**: preisanfrage/beschwerde → data_fetcher; kuendigung/sonstiges → direkt executive
+- **httpx-Logs**: auf WARNING unterdrückt (kein API-Noise im Output)
+- **Executive-Prompt** enthält ticket_betreff + ticket_nachricht für kundenbezogene Antwort
+- HITL ist console-based (`input()` in `human_review` node) — no Slack/Gmail wired yet
 - No CI, no tests, no lint/typecheck config — just `python some_file.py`
 
 ## Gotchas
