@@ -39,38 +39,19 @@ Ticket: {nachricht[:500]}"""
     return "Cloud"
 
 
-def run_data_fetcher(classification: str, tickets: list) -> dict:
-    """
-    Hauptfunktion: Sammelt Daten basierend auf der Klassifikation.
-
-    So funktioniert's:
-    1. Nimmt das erste offene Ticket
-    2. Holt die Kunden-ID aus dem Ticket
-    3. Ruft je nach Klassifikation die passenden DB-Funktionen auf
-    4. Gibt alles gesammelt zurück
-
-    Parameter:
-    - classification: "beschwerde" | "kuendigung" | "preisanfrage" | "sonstiges"
-    - tickets: Liste offener Tickets (vom Triage-Agent vorbereitet)
-
-    Rückgabe:
-    - dict mit allen gesammelten Daten (Kunde, Preise, Historie, ...)
-    """
+def _fetch_for_ticket(ticket: dict) -> dict:
+    """Holt Daten für EIN Ticket — je nach Klassifikation."""
+    classification = ticket.get("classification", "sonstiges")
+    kunden_id = ticket.get("kunden_id")
     collected = {}
 
-    if not tickets:
-        return {"error": "Keine offenen Tickets gefunden"}
-
-    ticket = tickets[0]
-    kunden_id = ticket.get("kunden_id")
     if not kunden_id:
-        logger.warning("Keine Kunden-ID im Ticket, überspringe Data-Fetching")
+        logger.warning(f"Ticket #{ticket.get('id')}: Keine Kunden-ID, überspringe")
         return {"error": "Keine Kunden-ID im Ticket"}
 
     # ─── Stammdaten immer holen (Name, Email, Vertragstyp, Status) ───
     try:
-        kunde = query_customer(kunden_id)
-        collected["kunde"] = kunde
+        collected["kunde"] = query_customer(kunden_id)
     except Exception as e:
         logger.error(f"Fehler beim Laden der Kundendaten (ID {kunden_id}): {e}")
         collected["kunde"] = {"error": f"Kundendaten nicht verfügbar: {e}"}
@@ -97,4 +78,25 @@ def run_data_fetcher(classification: str, tickets: list) -> dict:
     else:  # sonstiges
         pass
 
+    # Ticket-Info mitschicken, damit Executive den Bezug zum Kunden herstellen kann
+    collected["ticket"] = {
+        "id": ticket["id"],
+        "betreff": ticket.get("betreff", ""),
+        "nachricht": (ticket.get("nachricht", "") or "")[:500],
+    }
+
     return collected
+
+
+def run_data_fetcher(classification: str, tickets: list) -> dict:
+    """
+    Holt Daten aus DB für EIN Ticket — je nach Klassifikation.
+
+    Nutzt die _fetch_for_ticket()-Logik (Klassifikation aus Ticket oder Parameter),
+    inkl. ticket-Info für den Executive-Prompt.
+    """
+    if not tickets:
+        return {"error": "Keine offenen Tickets gefunden"}
+    ticket = dict(tickets[0])
+    ticket.setdefault("classification", classification)
+    return _fetch_for_ticket(ticket)
