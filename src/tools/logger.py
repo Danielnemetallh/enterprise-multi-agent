@@ -40,6 +40,11 @@ def setup_logging(level=logging.INFO, log_file: str | None = None):
         ))
         logger.addHandler(file_handler)
 
+    # Noisy HTTP-Client-Logs standardmäßig unterdrücken
+    # (Niemand will "POST https://api.deepseek.com 200 OK" sehen)
+    for noisy in ("httpx", "httpcore", "openai"):
+        logging.getLogger(noisy).setLevel(logging.WARNING)
+
     return logger
 
 
