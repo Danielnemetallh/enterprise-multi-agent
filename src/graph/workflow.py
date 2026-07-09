@@ -81,8 +81,17 @@ def data_fetcher(state: AgentState) -> AgentState:
 def executive_agent(state: AgentState) -> AgentState:
     """Agent 3: Erstellt Lösungsvorschlag (via Executive-Agent / DeepSeek)."""
     try:
-        action = run_executive(state["classification"], state["collected_data"])
-        return {**state, "proposed_action": action}
+        collected_data = state["collected_data"]
+        # Falls kein Data-Fetcher gelaufen ist (kuendigung/sonstiges),
+        # trotzdem Basis-Kundendaten aus der DB holen
+        if not collected_data and state.get("ticket"):
+            kunden_id = state["ticket"].get("kunden_id")
+            if kunden_id:
+                from src.tools.db_tools import query_customer
+                collected_data = {"kunde": query_customer(kunden_id)}
+
+        action = run_executive(state["classification"], collected_data)
+        return {**state, "proposed_action": action, "collected_data": collected_data}
     except Exception as e:
         logger.error(f"Executive-Agent Fehler: {e}")
         return {**state, "proposed_action": {

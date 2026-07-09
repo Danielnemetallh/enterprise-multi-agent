@@ -9,6 +9,7 @@ Usage:
     python main.py                    # Nächstes dringendes Ticket verarbeiten
     python main.py --input 5          # Bestimmtes Ticket (ID 5) verarbeiten
     python main.py --db-rebuild       # DB neu erstellen, dann Ticket verarbeiten
+    python main.py --verbose          # Mit detaillierten INFO-Logs
 """
 import sys
 import os
@@ -25,6 +26,11 @@ logger = setup_logging()
 
 def main():
     args = sys.argv[1:]
+
+    # Standard: nur WARNING+ anzeigen, mit --verbose auch INFO
+    if "--verbose" not in args:
+        import logging
+        logging.getLogger().setLevel(logging.WARNING)
 
     # DB bei Bedarf neu erstellen
     if "--db-rebuild" in args:
