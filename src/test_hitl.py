@@ -7,7 +7,6 @@ Dann kannst du "ja", "nein" oder "eigen" (KI-Vorschlag) eingeben.
 Ausführung: python src/test_hitl.py
 """
 
-import sqlite3
 import os
 import sys
 import json
@@ -16,47 +15,37 @@ import json
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from src.tools.llm import get_llm, extract_json
-from src.tools.db_tools import query_customer, query_kunden_historie, query_competitor_prices
+from src.tools.db_tools import query_customer, query_kunden_historie, query_open_tickets
 from src.agents.triage_agent import classify_ticket
 from src.agents.executive_agent import run_executive
 
 # ─── Kündigungs-Ticket aus DB holen ───
-db = os.path.join(os.path.dirname(__file__), "..", "data", "mock_customers.db")
-db = os.path.abspath(db)
-
-conn = sqlite3.connect(db)
-cur = conn.cursor()
-cur.execute("""
-    SELECT t.id, t.kunden_id, t.typ, t.betreff, t.nachricht, c.name, c.email
-    FROM support_tickets t
-    JOIN customers c ON t.kunden_id = c.id
-    WHERE t.typ = 'kuendigung' AND t.status != 'erledigt'
-    LIMIT 1
-""")
-r = cur.fetchone()
-conn.close()
-
-if not r:
+tickets = [t for t in query_open_tickets() if t["typ"] == "kuendigung"]
+if not tickets:
     print("❌ Keine Kündigungs-Tickets gefunden!")
     sys.exit(1)
+
+r_vals = (tickets[0]["id"], tickets[0]["kunden_id"], tickets[0]["typ"],
+          tickets[0]["betreff"], tickets[0]["nachricht"],
+          tickets[0]["kunde"], tickets[0]["email"])
 
 print("\n" + "="*50)
 print("🧪 HITL-TEST: Kündigung verarbeiten")
 print("="*50)
-print(f"\n📧 Ticket #{r[0]}")
-print(f"   Kunde:  {r[5]}")
-print(f"   Betreff: {r[3]}")
-print(f"   Nachricht: {r[4][:150]}...")
+print(f"\n📧 Ticket #{r_vals[0]}")
+print(f"   Kunde:  {r_vals[5]}")
+print(f"   Betreff: {r_vals[3]}")
+print(f"   Nachricht: {r_vals[4][:150]}...")
 
 # ─── 1. Triage ───
 print(f"\n--- 1️⃣  Triage-Agent ---")
-classification = classify_ticket(r[3], r[4])
+classification = classify_ticket(r_vals[3], r_vals[4])
 print(f"   → Klassifikation: {classification.upper()}")
 
 # ─── 2. Data-Fetcher ───
 print(f"\n--- 2️⃣  Data-Fetcher ---")
-kunde = query_customer(r[1])
-historie = query_kunden_historie(r[1])
+kunde = query_customer(r_vals[1])
+historie = query_kunden_historie(r_vals[1])
 collected = {"kunde": kunde, "historie": historie}
 print(f"   → Kunde: {kunde['name']} ({kunde['status']}, {kunde['vertragstyp']})")
 print(f"   → Historie: {len(historie['orders'])} Bestellungen, {len(historie['tickets'])} Tickets")

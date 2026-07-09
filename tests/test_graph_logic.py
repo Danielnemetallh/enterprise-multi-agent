@@ -34,7 +34,7 @@ class TestRouter:
         base_state["classification"] = "beschwerde"
         assert router(base_state) == "data_fetcher"
 
-    def test_kuendigung_geht_direkt_zu_executive(self, base_state):
+    def test_kuendigung_geht_zu_executive(self, base_state):
         base_state["classification"] = "kuendigung"
         assert router(base_state) == "executive_agent"
 
