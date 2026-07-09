@@ -40,6 +40,10 @@ def setup_logging(level=logging.INFO, log_file: str | None = None):
         ))
         logger.addHandler(file_handler)
 
+    # Laute API-Client-Logs auf WARNING drosseln (httpx, openai, httpcore)
+    for noisy in ("httpx", "openai", "httpcore"):
+        logging.getLogger(noisy).setLevel(logging.WARNING)
+
     return logger
 
 

@@ -405,6 +405,16 @@ def query_kunden_historie(kunden_id: int) -> dict:
         return {"orders": [], "tickets": []}
 
 
+def mark_ticket_done(ticket_id: int) -> None:
+    """Markiert ein Ticket nach der Verarbeitung als erledigt."""
+    try:
+        with db_connection() as conn:
+            conn.execute("UPDATE support_tickets SET status = 'erledigt' WHERE id = ?", (ticket_id,))
+        logger.info(f"Ticket #{ticket_id} als erledigt markiert")
+    except sqlite3.DatabaseError as e:
+        logger.error(f"DB-Fehler bei mark_ticket_done({ticket_id}): {e}")
+
+
 if __name__ == "__main__":
     from src.tools.logger import setup_logging
     setup_logging()

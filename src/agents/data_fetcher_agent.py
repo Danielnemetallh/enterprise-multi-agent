@@ -39,29 +39,25 @@ Ticket: {nachricht[:500]}"""
     return "Cloud"
 
 
-def run_data_fetcher(classification: str, tickets: list) -> dict:
+def run_data_fetcher(classification: str, ticket: dict | None) -> dict:
     """
     Hauptfunktion: Sammelt Daten basierend auf der Klassifikation.
 
-    So funktioniert's:
-    1. Nimmt das erste offene Ticket
-    2. Holt die Kunden-ID aus dem Ticket
-    3. Ruft je nach Klassifikation die passenden DB-Funktionen auf
-    4. Gibt alles gesammelt zurück
+    Holt die Kunden-ID aus dem Ticket und ruft je nach Klassifikation
+    die passenden DB-Funktionen auf.
 
     Parameter:
     - classification: "beschwerde" | "kuendigung" | "preisanfrage" | "sonstiges"
-    - tickets: Liste offener Tickets (vom Triage-Agent vorbereitet)
+    - ticket: Vom Triage-Agent ausgewähltes Ticket
 
     Rückgabe:
     - dict mit allen gesammelten Daten (Kunde, Preise, Historie, ...)
     """
     collected = {}
 
-    if not tickets:
-        return {"error": "Keine offenen Tickets gefunden"}
+    if not ticket:
+        return {"error": "Kein Ticket übergeben"}
 
-    ticket = tickets[0]
     kunden_id = ticket.get("kunden_id")
     if not kunden_id:
         logger.warning("Keine Kunden-ID im Ticket, überspringe Data-Fetching")

@@ -21,7 +21,7 @@ from src.agents.triage_agent import classify_ticket
 from src.agents.data_fetcher_agent import run_data_fetcher
 from src.agents.executive_agent import run_executive
 from src.tools.llm import get_llm, extract_json
-from src.tools.db_tools import query_open_tickets
+from src.tools.db_tools import query_open_tickets, mark_ticket_done
 
 logger = logging.getLogger(__name__)
 
@@ -48,13 +48,16 @@ def triage_agent(state: AgentState) -> AgentState:
             logger.warning("Keine offenen Tickets gefunden")
             return {**state, "classification": "sonstiges", "ticket": None}
 
-        # Nutze state["input"] (z.B. Ticket-ID) oder falle auf erstes Ticket zurück
+        # Nutze state["input"] (z.B. Ticket-ID) oder Priorität
         ticket = tickets[0]
         if state["input"]:
             for t in tickets:
                 if str(t["id"]) == state["input"].strip():
                     ticket = t
                     break
+        else:
+            priority = {"kuendigung": 0, "beschwerde": 1, "preisanfrage": 2, "sonstiges": 3}
+            ticket = min(tickets, key=lambda t: priority.get(t.get("typ", "sonstiges"), 99))
 
         classification = classify_ticket(ticket["betreff"], ticket["nachricht"])
         logger.info(f"Triage: [{classification}] #{ticket['id']} {ticket['betreff']}")
@@ -67,8 +70,7 @@ def triage_agent(state: AgentState) -> AgentState:
 def data_fetcher(state: AgentState) -> AgentState:
     """Agent 2: Holt Daten aus DB — je nach Klassifikation (via Data-Fetcher Agent)."""
     try:
-        tickets = [state["ticket"]] if state.get("ticket") else query_open_tickets()
-        collected = run_data_fetcher(state["classification"], tickets)
+        collected = run_data_fetcher(state["classification"], state.get("ticket"))
         logger.info(f"Data-Fetcher: {len(collected)} Datenkategorien gesammelt")
         return {**state, "collected_data": collected}
     except Exception as e:
@@ -171,7 +173,13 @@ def execute_action(state: AgentState) -> AgentState:
         f"Kunde: {kunde.get('name', '?')} ({kunde.get('status', '?')})"
     )
     logger.info(f"Nachricht: {action.get('nachricht', '?')}")
-    return state
+
+    # Ticket als erledigt markieren (damit nächstes Mal ein anderes dran kommt)
+    ticket_id = state.get("ticket", {}).get("id")
+    if ticket_id:
+        mark_ticket_done(ticket_id)
+
+    return {**state, "approval": "approved"}
 
 
 # ─────────────────────── C O N D I T I O N A L   E D G E S ───────────────────────
@@ -245,5 +253,26 @@ if __name__ == "__main__":
             "approval": "pending",
         })
         logger.info("Graph-Durchlauf abgeschlossen")
+
+        ticket = result.get("ticket")
+        action = result.get("proposed_action", {})
+        kunde = result.get("collected_data", {}).get("kunde", {})
+
+        print("\n" + "=" * 60)
+        print(" 📋 ABSCHLUSSBERICHT")
+        print("=" * 60)
+        if ticket:
+            print(f"  Ticket #{ticket['id']} [{result.get('classification', '?')}]")
+            print(f"  Kunde: {kunde.get('name', '?')} ({kunde.get('status', '?')})")
+            print(f"  Betreff: {ticket['betreff']}")
+            print(f"  Status: {'✅ Genehmigt' if result.get('approval') == 'approved' else '❌ Abgelehnt'}")
+            print(f"  Aktion: {action.get('typ', '?')} | Rabatt: {action.get('wert', 0)}%")
+            print(f"  Antwort: {action.get('nachricht', '')}")
+        else:
+            print("  Kein Ticket verarbeitet.")
+        print()
+
     except Exception as e:
         logger.error(f"Graph-Durchlauf fehlgeschlagen: {e}")
+        import traceback
+        traceback.print_exc()
