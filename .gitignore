@@ -22,6 +22,7 @@ Thumbs.db
 # Project data
 *.db
 *.sqlite3
+data/customer_support_tickets.csv
 
 # Logs
 .logs/
@@ -31,3 +32,5 @@ openspec/
 .claude/
 opencode.json
 course-architecture.html
+CLAUDE.md
+src/test_hitl.py
