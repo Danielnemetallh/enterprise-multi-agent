@@ -1,37 +1,34 @@
 """
-Zentrale Logger-Konfiguration für das Multi-Agent-System.
-=========================================================
-Ermöglicht einheitliches Logging in allen Modulen.
+Central logging configuration for the multi-agent system.
 """
 
 import logging
 import sys
 
 
-def setup_logging(level=logging.INFO, log_file: str | None = None):
+def setup_logging(level=logging.WARNING, log_file: str | None = None, quiet: bool = False):
     """
-    Richtet das Logging einmalig ein.
+    Configure logging once for the application.
 
-    - level: logging.INFO (Standard), logging.DEBUG, logging.WARNING, etc.
-    - log_file: Optionaler Pfad zu einer Log-Datei
+    - level: default WARNING to keep console output quiet during workflow runs
+    - log_file: optional path to a log file
+    - quiet: when True, suppress console handlers entirely
     """
     logger = logging.getLogger()
     logger.setLevel(level)
 
-    # Verhindert doppelte Handler bei mehrmaligem Aufruf
     if logger.handlers:
-        return logger
+        logger.handlers.clear()
 
-    # Konsolen-Handler (immer)
-    console = logging.StreamHandler(sys.stdout)
-    console.setLevel(level)
-    console.setFormatter(logging.Formatter(
-        "%(asctime)s [%(levelname)s] %(name)s: %(message)s",
-        datefmt="%H:%M:%S",
-    ))
-    logger.addHandler(console)
+    if not quiet:
+        console = logging.StreamHandler(sys.stdout)
+        console.setLevel(level)
+        console.setFormatter(logging.Formatter(
+            "%(asctime)s [%(levelname)s] %(name)s: %(message)s",
+            datefmt="%H:%M:%S",
+        ))
+        logger.addHandler(console)
 
-    # Datei-Handler (optional)
     if log_file:
         file_handler = logging.FileHandler(log_file, encoding="utf-8")
         file_handler.setLevel(level)
@@ -40,16 +37,22 @@ def setup_logging(level=logging.INFO, log_file: str | None = None):
         ))
         logger.addHandler(file_handler)
 
-    # Laute API-Client-Logs auf WARNING drosseln (httpx, openai, httpcore)
-    for noisy in ("httpx", "openai", "httpcore"):
-        logging.getLogger(noisy).setLevel(logging.WARNING)
+    for noisy in (
+        "httpx",
+        "openai",
+        "httpcore",
+        "langchain",
+        "langgraph",
+        "urllib3",
+    ):
+        logging.getLogger(noisy).setLevel(logging.ERROR)
 
     return logger
 
 
 if __name__ == "__main__":
-    setup_logging()
+    setup_logging(level=logging.INFO)
     logger = logging.getLogger("test")
-    logger.info("Logger funktioniert!")
-    logger.warning("Das ist eine Warnung.")
-    logger.error("Das ist ein Fehler.")
+    logger.info("Logger is working")
+    logger.warning("This is a warning")
+    logger.error("This is an error")

@@ -1,0 +1,30 @@
+{
+  "name": "kaggle_customer_support",
+  "source_dataset": "kaggle_customer_support",
+  "columns": {
+    "ticket_id": "Ticket ID",
+    "customer_name": "Customer Name",
+    "customer_email": "Customer Email",
+    "product": "Product Purchased",
+    "category": "Ticket Type",
+    "subject": "Ticket Subject",
+    "description": "Ticket Description",
+    "status": "Ticket Status",
+    "priority": "Ticket Priority",
+    "channel": "Ticket Channel",
+    "resolution": "Resolution",
+    "satisfaction_rating": "Customer Satisfaction Rating"
+  },
+  "category_map": {
+    "Cancellation request": "cancellation_request",
+    "Technical issue": "technical_issue",
+    "Refund request": "refund_request",
+    "Product inquiry": "product_inquiry",
+    "Billing inquiry": "billing_inquiry"
+  },
+  "status_map": {
+    "Open": "open",
+    "Pending Customer Response": "pending",
+    "Closed": "closed"
+  }
+}

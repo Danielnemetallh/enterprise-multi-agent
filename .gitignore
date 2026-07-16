@@ -25,3 +25,9 @@ Thumbs.db
 
 # Logs
 .logs/
+
+# Dev scaffolding
+openspec/
+.claude/
+opencode.json
+course-architecture.html

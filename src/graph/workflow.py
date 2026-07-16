@@ -1,241 +1,281 @@
 """
 Enterprise Multi-Agent System — LangGraph Workflow
 ====================================================
-Nodes:   triage → data_fetcher / executive → human_review → execute
-Edges:   conditional routing via router() & needs_approval()
+Nodes:   triage -> executive -> human_review -> execute
+Edges:   conditional routing via needs_approval()
 State:   AgentState (TypedDict)
 LLM:     DeepSeek (via src.tools.llm)
-DB:      SQLite Mock-DB (via src.tools.db_tools)
+DB:      SQLite ticket store (via src.tools.db_tools)
 """
-
-# Projekt-Root zum sys.path hinzufügen (für direkte Ausführung)
-import sys, os
-sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
 
 import json
 import logging
-from typing import Literal, TypedDict
-from langgraph.graph import StateGraph, END
+import os
+import sys
 
-from src.agents.triage_agent import classify_ticket
-from src.agents.data_fetcher_agent import run_data_fetcher
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
+
+from typing import Literal, TypedDict
+
+from langgraph.graph import END, StateGraph
+
 from src.agents.executive_agent import run_executive
-from src.tools.llm import get_llm, extract_json
-from src.tools.db_tools import query_open_tickets, mark_ticket_done
+from src.agents.triage_agent import classify_ticket_smart
+from src.tools.case_file import build_case_file, format_case_file, new_run_id
+from src.tools.db_tools import mark_ticket_processed, query_open_tickets
+from src.tools.llm import extract_json, get_llm
+from src.tools.policy import evaluate_policy
 
 logger = logging.getLogger(__name__)
 
 
-# ─────────────────────────────── S T A T E ───────────────────────────────
-
 class AgentState(TypedDict):
-    """Gemeinsamer State, der durch den gesamten Graphen fließt."""
-    input: str                 # Original-Eingabe (Mail / Task)
-    ticket: dict | None        # Aktuelles Ticket (vom Triage gesetzt)
-    classification: str        # "beschwerde" | "kuendigung" | "preisanfrage" | "sonstiges"
-    collected_data: dict       # Daten aus DB / Scraping
-    proposed_action: dict      # Lösungsvorschlag vom Executive-Agent
-    approval: str              # "pending" | "approved" | "rejected"
+    """Shared state flowing through the graph."""
+
+    input: str
+    run_id: str
+    ticket: dict | None
+    classification: str
+    triage_source: str
+    collected_data: dict
+    proposed_action: dict
+    approval: str
+    workflow_trace: list[str]
+    execution_result: str
 
 
-# ─────────────────────────────── N O D E S ───────────────────────────────
+def _append_trace(state: AgentState, step: str) -> list[str]:
+    trace = list(state.get("workflow_trace", []))
+    trace.append(step)
+    return trace
+
 
 def triage_agent(state: AgentState) -> AgentState:
-    """Agent 1: Klassifiziert den Eingang via DeepSeek."""
+    """Agent 1: classify the next open ticket."""
     try:
         tickets = query_open_tickets()
         if not tickets:
-            logger.warning("Keine offenen Tickets gefunden")
-            return {**state, "classification": "sonstiges", "ticket": None}
+            logger.warning("No open tickets found")
+            return {
+                **state,
+                "classification": "product_inquiry",
+                "ticket": None,
+                "triage_source": "none",
+                "workflow_trace": _append_trace(state, "Triage -> no open tickets"),
+            }
 
-        # Nutze state["input"] (z.B. Ticket-ID) oder Priorität
         ticket = tickets[0]
         if state["input"]:
-            for t in tickets:
-                if str(t["id"]) == state["input"].strip():
-                    ticket = t
+            requested = state["input"].strip()
+            for candidate in tickets:
+                if str(candidate["id"]) == requested or candidate.get("ticket_id") == requested:
+                    ticket = candidate
                     break
-        else:
-            priority = {"kuendigung": 0, "beschwerde": 1, "preisanfrage": 2, "sonstiges": 3}
-            ticket = min(tickets, key=lambda t: priority.get(t.get("typ", "sonstiges"), 99))
 
-        classification = classify_ticket(ticket["betreff"], ticket["nachricht"])
-        logger.info(f"Triage: [{classification}] #{ticket['id']} {ticket['betreff']}")
-        return {**state, "classification": classification, "ticket": ticket}
-    except Exception as e:
-        logger.error(f"Triage-Agent Fehler: {e}")
-        return {**state, "classification": "sonstiges", "ticket": None}
-
-
-def data_fetcher(state: AgentState) -> AgentState:
-    """Agent 2: Holt Daten aus DB — je nach Klassifikation (via Data-Fetcher Agent)."""
-    try:
-        collected = run_data_fetcher(state["classification"], state.get("ticket"))
-        logger.info(f"Data-Fetcher: {len(collected)} Datenkategorien gesammelt")
-        return {**state, "collected_data": collected}
-    except Exception as e:
-        logger.error(f"Data-Fetcher Fehler: {e}")
-        return {**state, "collected_data": {}}
+        classification, triage_source = classify_ticket_smart(ticket)
+        trace = _append_trace(state, f"Triage -> {classification} ({triage_source})")
+        logger.info("Triage: [%s] #%s %s", classification, ticket["id"], ticket["subject"])
+        return {
+            **state,
+            "classification": classification,
+            "ticket": ticket,
+            "triage_source": triage_source,
+            "workflow_trace": trace,
+        }
+    except Exception as exc:
+        logger.error("Triage agent error: %s", exc)
+        return {
+            **state,
+            "classification": "product_inquiry",
+            "ticket": None,
+            "triage_source": "error",
+            "workflow_trace": _append_trace(state, f"Triage -> error: {exc}"),
+        }
 
 
 def executive_agent(state: AgentState) -> AgentState:
-    """Agent 3: Erstellt Lösungsvorschlag (via Executive-Agent / DeepSeek)."""
+    """Agent 2: create a policy-compatible solution proposal."""
     try:
-        collected_data = state["collected_data"]
-        # Falls kein Data-Fetcher gelaufen ist (kuendigung/sonstiges),
-        # trotzdem Basis-Kundendaten aus der DB holen
-        if not collected_data and state.get("ticket"):
-            kunden_id = state["ticket"].get("kunden_id")
-            if kunden_id:
-                from src.tools.db_tools import query_customer
-                collected_data = {"kunde": query_customer(kunden_id)}
-
+        ticket = state.get("ticket") or {}
+        collected_data = {"ticket": ticket}
         action = run_executive(state["classification"], collected_data)
-        return {**state, "proposed_action": action, "collected_data": collected_data}
-    except Exception as e:
-        logger.error(f"Executive-Agent Fehler: {e}")
-        return {**state, "proposed_action": {
-            "typ": "info", "wert": 0,
-            "betreff": "Ihre Anfrage",
-            "nachricht": "Wir konnten Ihre Anfrage leider nicht bearbeiten. Bitte kontaktieren Sie uns erneut.",
-            "kritisch": False,
-        }}
+        requires = action.get("requires_approval", False)
+        trace = _append_trace(
+            state,
+            f"Executive -> {action.get('action_type')} ({action.get('discount_percent', 0)}%)",
+        )
+        trace.append(
+            f"Policy -> {action.get('policy_outcome', 'unknown')} "
+            f"({action.get('approval_reason') or 'no policy trigger'})"
+        )
+        return {
+            **state,
+            "proposed_action": action,
+            "collected_data": collected_data,
+            "workflow_trace": trace,
+        }
+    except Exception as exc:
+        logger.error("Executive agent error: %s", exc)
+        return {
+            **state,
+            "proposed_action": evaluate_policy(
+                {
+                    "action_type": "provide_information",
+                    "discount_percent": 0,
+                    "subject": "Your support request",
+                    "customer_message": "We could not process your request at this time.",
+                },
+                state.get("classification", "product_inquiry"),
+                state.get("ticket"),
+            ),
+            "workflow_trace": _append_trace(state, f"Executive -> error: {exc}"),
+        }
 
 
 def human_review(state: AgentState) -> AgentState:
-    """Wartet auf menschliche Freigabe (Human-in-the-Loop) — mit 'eigen'-Option."""
+    """Wait for human approval for critical actions."""
     while True:
         action = state["proposed_action"]
 
-        print(f"\n 🚷 FREIGABE ERFORDERLICH - kritische Aktion!\n")
-        print(f" ─────────────────────────────────────")
-        print(f"  Typ: {action.get('typ', '?')} ")
-        print(f"  Rabatt: {action.get('wert', 0)}%")
-        print(f"  Betreff: {action.get('betreff', '?')}")
-        print(f"  Nachricht: {action.get('nachricht', '?')}")
-        print(f"  ─────────────────────────────────────")
+        print("\n APPROVAL REQUIRED\n")
+        print(" -------------------------------------")
+        print(f"  Action: {action.get('action_type', '?')}")
+        print(f"  Discount: {action.get('discount_percent', 0)}%")
+        print(f"  Reason: {action.get('approval_reason', '-')}")
+        print(f"  Subject: {action.get('subject', '?')}")
+        print(f"  Customer Draft: {action.get('customer_message', '?')}")
+        print(" -------------------------------------")
 
-        inp = input("  Aktion freigeben? (ja/nein/eigen): ").strip().lower()
+        response = input("  Approve action? (yes/no/alternative): ").strip().lower()
 
-        if inp in ("ja", "yes"):
-            state["approval"] = "approved"
-            logger.info("Aktion freigegeben")
-            return state
+        if response in ("yes", "ja"):
+            trace = _append_trace(state, "HITL -> approved")
+            logger.info("Action approved")
+            return {**state, "approval": "approved", "workflow_trace": trace}
 
-        elif inp in ("nein", "no"):
-            state["approval"] = "rejected"
-            logger.info("Aktion abgelehnt")
-            return state
+        if response in ("no", "nein"):
+            trace = _append_trace(state, "HITL -> rejected")
+            logger.info("Action rejected")
+            return {**state, "approval": "rejected", "workflow_trace": trace}
 
-        elif inp == "eigen":
-            print(f"\n  🤖 KI erstellt Alternativ-Vorschlag...")
+        if response in ("alternative", "eigen"):
+            print("\n  Generating alternative proposal...")
             prompt = f"""The human reviewer rejected this proposed action:
 {json.dumps(action, indent=2, ensure_ascii=False)}
 
-Based on the SAME customer data, suggest a DIFFERENT approach.
-Think creatively — what else could we offer the customer?
+Based on the SAME ticket details, suggest a DIFFERENT approach.
 
 Respond with a JSON object:
 {{
-    "typ": "angebot|entschuldigung|info|storno",
-    "wert": <number 0-30>,
-    "betreff": "<short subject in German>",
-    "nachricht": "<alternative response in German, max 2 Sätze>",
-    "kritisch": true/false
+    "action_type": "offer_discount|send_apology|provide_information|process_cancellation",
+    "discount_percent": <number 0-30>,
+    "subject": "<short subject in English>",
+    "customer_message": "<alternative response in English, max 2 sentences>",
+    "business_reason": "<short internal reason>"
 }}"""
             try:
                 llm = get_llm(temperature=0.3)
                 resp = llm.invoke(prompt)
                 new_action = extract_json(resp.content)
-                new_action.setdefault("typ", "info")
-                new_action.setdefault("wert", 0)
-                new_action.setdefault("betreff", "Alternativ-Vorschlag")
-                new_action.setdefault("nachricht", "Wir haben einen neuen Vorschlag für Sie.")
-                new_action.setdefault("kritisch", new_action.get("wert", 0) > 15)
-
+                new_action.setdefault("action_type", "provide_information")
+                new_action.setdefault("discount_percent", 0)
+                new_action.setdefault("subject", "Alternative proposal")
+                new_action.setdefault(
+                    "customer_message",
+                    "We have prepared an alternative response for you.",
+                )
+                new_action = evaluate_policy(
+                    new_action,
+                    state["classification"],
+                    state.get("ticket"),
+                )
                 state["proposed_action"] = new_action
-                logger.info(f"Neuer Alternativ-Vorschlag: {new_action['typ']} | {new_action.get('betreff', '?')}")
-
-            except Exception as e:
-                logger.error(f"Alternativ-Vorschlag fehlgeschlagen: {e}")
-                print(f"  ⚠️ Konnte keinen Alternativ-Vorschlag erstellen: {e}")
-                print("  → Bitte nochmal eingeben (ja/nein/eigen)")
+                logger.info(
+                    "Alternative proposal: %s | %s",
+                    new_action["action_type"],
+                    new_action.get("subject", "?"),
+                )
+            except Exception as exc:
+                logger.error("Alternative proposal failed: %s", exc)
+                print(f"  Could not create an alternative proposal: {exc}")
         else:
-            print("  ⚠️ Bitte 'ja', 'nein' oder 'eigen' eingeben.")
+            print("  Please enter 'yes', 'no', or 'alternative'.")
 
 
 def execute_action(state: AgentState) -> AgentState:
-    """Führt die Aktion aus."""
+    """Execute the approved action."""
     action = state["proposed_action"]
-    kunde = state["collected_data"].get("kunde", {})
+    ticket = state.get("ticket") or {}
+
+    if action.get("rejected"):
+        result = "Action rejected by policy — nothing executed"
+        return {
+            **state,
+            "execution_result": result,
+            "workflow_trace": _append_trace(state, "Execute -> policy rejected"),
+        }
 
     if state["approval"] == "rejected":
+        result = "Action rejected by reviewer — nothing executed"
         logger.warning(
-            f"Aktion abgelehnt | Typ: {action.get('typ', '?')} | "
-            f"Rabatt: {action.get('wert', 0)}% | Kunde: {kunde.get('name', '?')}"
+            "Action rejected | Type: %s | Discount: %s%% | Customer: %s",
+            action.get("action_type", "?"),
+            action.get("discount_percent", 0),
+            ticket.get("customer_name", "?"),
         )
-        return state
+        return {
+            **state,
+            "execution_result": result,
+            "workflow_trace": _append_trace(state, "Execute -> reviewer rejected"),
+        }
 
     logger.info(
-        f"Aktion ausgeführt | Typ: {action.get('typ', '?')} | "
-        f"Rabatt: {action.get('wert', 0)}% | "
-        f"Kunde: {kunde.get('name', '?')} ({kunde.get('status', '?')})"
+        "Action executed | Type: %s | Discount: %s%% | Customer: %s",
+        action.get("action_type", "?"),
+        action.get("discount_percent", 0),
+        ticket.get("customer_name", "?"),
     )
-    logger.info(f"Nachricht: {action.get('nachricht', '?')}")
 
-    # Ticket als erledigt markieren (damit nächstes Mal ein anderes dran kommt)
-    ticket_id = state.get("ticket", {}).get("id")
+    ticket_id = ticket.get("id")
     if ticket_id:
-        mark_ticket_done(ticket_id)
+        mark_ticket_processed(ticket_id)
 
-    return {**state, "approval": "approved"}
-
-
-# ─────────────────────── C O N D I T I O N A L   E D G E S ───────────────────────
-
-def router(state: AgentState) -> Literal["data_fetcher", "executive_agent"]:
-    """Leitet je nach Klassifikation an den richtigen Agenten."""
-    if state["classification"] in ("preisanfrage", "beschwerde"):
-        return "data_fetcher"        # → Agent 2: Daten holen
-    return "executive_agent"         # → Agent 3: Direkt Lösung
+    result = (
+        f"Ticket #{ticket_id} processed successfully"
+        if ticket_id
+        else "Action executed successfully"
+    )
+    return {
+        **state,
+        "approval": "approved",
+        "execution_result": result,
+        "workflow_trace": _append_trace(state, "Execute -> completed"),
+    }
 
 
 def needs_approval(state: AgentState) -> Literal["human_review", "execute_action"]:
-    """Prüft ob Human-in-the-Loop nötig ist (vom Executive gesetztes 'kritisch'-Flag)."""
     action = state["proposed_action"]
-    kritisch = action.get("kritisch", action.get("wert", 0) > 15)
-    if kritisch:
-        return "human_review"       # Kritisch → Manager-Freigabe
-    return "execute_action"         # Unkritisch → direkt ausführen
+    if action.get("rejected"):
+        return "execute_action"
+    if action.get("requires_approval", False):
+        return "human_review"
+    return "execute_action"
 
-
-# ─────────────────────── G R A P H   B A U E N ───────────────────────
 
 def build_graph() -> StateGraph:
-    """Erstellt den LangGraph-Graphen."""
     workflow = StateGraph(AgentState)
 
-    # Nodes registrieren
     workflow.add_node("triage_agent", triage_agent)
-    workflow.add_node("data_fetcher", data_fetcher)
     workflow.add_node("executive_agent", executive_agent)
     workflow.add_node("human_review", human_review)
     workflow.add_node("execute_action", execute_action)
 
-    # Entry Point
     workflow.set_entry_point("triage_agent")
-
-    # Kanten (Edges)
-    workflow.add_conditional_edges(
-        "triage_agent",
-        router,
-        {"data_fetcher": "data_fetcher", "executive_agent": "executive_agent"}
-    )
-    workflow.add_edge("data_fetcher", "executive_agent")
+    workflow.add_edge("triage_agent", "executive_agent")
     workflow.add_conditional_edges(
         "executive_agent",
         needs_approval,
-        {"human_review": "human_review", "execute_action": "execute_action"}
+        {"human_review": "human_review", "execute_action": "execute_action"},
     )
     workflow.add_edge("human_review", "execute_action")
     workflow.add_edge("execute_action", END)
@@ -243,45 +283,48 @@ def build_graph() -> StateGraph:
     return workflow.compile()
 
 
-# ─────────────────────────────── M A I N ───────────────────────────────
-
 if __name__ == "__main__":
     from src.tools.logger import setup_logging
-    setup_logging()
+
+    setup_logging(quiet=True)
 
     graph = build_graph()
-    logger.info("LangGraph compiled!")
+    run_id = new_run_id()
 
     try:
         result = graph.invoke({
             "input": "",
+            "run_id": run_id,
             "ticket": None,
             "classification": "",
+            "triage_source": "",
             "collected_data": {},
             "proposed_action": {},
             "approval": "pending",
+            "workflow_trace": [],
+            "execution_result": "",
         })
-        logger.info("Graph-Durchlauf abgeschlossen")
 
-        ticket = result.get("ticket")
-        action = result.get("proposed_action", {})
-        kunde = result.get("collected_data", {}).get("kunde", {})
+        case = build_case_file(
+            run_id=run_id,
+            result=result,
+            workflow_trace=result.get("workflow_trace", []),
+            execution_result=result.get("execution_result", "unknown"),
+        )
+        print("\n" + format_case_file(case))
 
-        print("\n" + "=" * 60)
-        print(" 📋 ABSCHLUSSBERICHT")
-        print("=" * 60)
-        if ticket:
-            print(f"  Ticket #{ticket['id']} [{result.get('classification', '?')}]")
-            print(f"  Kunde: {kunde.get('name', '?')} ({kunde.get('status', '?')})")
-            print(f"  Betreff: {ticket['betreff']}")
-            print(f"  Status: {'✅ Genehmigt' if result.get('approval') == 'approved' else '❌ Abgelehnt'}")
-            print(f"  Aktion: {action.get('typ', '?')} | Rabatt: {action.get('wert', 0)}%")
-            print(f"  Antwort: {action.get('nachricht', '')}")
-        else:
-            print("  Kein Ticket verarbeitet.")
-        print()
-
-    except Exception as e:
-        logger.error(f"Graph-Durchlauf fehlgeschlagen: {e}")
-        import traceback
-        traceback.print_exc()
+    except Exception as exc:
+        case = build_case_file(
+            run_id=run_id,
+            result={
+                "ticket": None,
+                "classification": "",
+                "triage_source": "error",
+                "collected_data": {},
+                "proposed_action": {},
+                "approval": "failed",
+            },
+            workflow_trace=[f"Workflow failed: {exc}"],
+            execution_result=f"Workflow failed: {exc}",
+        )
+        print("\n" + format_case_file(case))

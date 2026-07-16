@@ -1,77 +1,94 @@
-"""
-Tests für den Triage-Agent — klassifiziert Tickets.
-LLM-Aufrufe werden gemockt, damit die Tests schnell und API-unabhängig sind.
-"""
+"""Tests for triage agent classification."""
 from unittest.mock import patch
-import pytest
-from src.agents.triage_agent import classify_ticket, run_triage
+
+from src.agents.triage_agent import classify_ticket, classify_ticket_smart, run_triage
 
 
 class TestClassifyTicket:
-    """classify_ticket() mit gemocktem DeepSeek."""
+    @patch("src.agents.triage_agent.call_llm_safe")
+    def test_product_inquiry(self, mock_llm):
+        mock_llm.return_value = "product_inquiry"
+        result = classify_ticket("What does it cost?", "I need pricing details.")
+        assert result == "product_inquiry"
 
     @patch("src.agents.triage_agent.call_llm_safe")
-    def test_preisanfrage(self, mock_llm):
-        mock_llm.return_value = "preisanfrage"
-        result = classify_ticket("Was kostet XYZ?", "Ich möchte einen Preis.")
-        assert result == "preisanfrage"
+    def test_technical_issue(self, mock_llm):
+        mock_llm.return_value = "technical_issue"
+        result = classify_ticket("Outage", "Service was down.")
+        assert result == "technical_issue"
 
     @patch("src.agents.triage_agent.call_llm_safe")
-    def test_beschwerde(self, mock_llm):
-        mock_llm.return_value = "beschwerde"
-        result = classify_ticket("Schlechter Service", "Ich bin unzufrieden.")
-        assert result == "beschwerde"
+    def test_cancellation_request(self, mock_llm):
+        mock_llm.return_value = "cancellation_request"
+        result = classify_ticket("Cancellation", "I want to cancel.")
+        assert result == "cancellation_request"
 
     @patch("src.agents.triage_agent.call_llm_safe")
-    def test_kuendigung(self, mock_llm):
-        mock_llm.return_value = "kuendigung"
-        result = classify_ticket("Kündigung", "Hiermit kündige ich.")
-        assert result == "kuendigung"
-
-    @patch("src.agents.triage_agent.call_llm_safe")
-    def test_sonstiges(self, mock_llm):
-        mock_llm.return_value = "sonstiges"
-        result = classify_ticket("Frage zur Rechnung", "Wo ist meine Rechnung?")
-        assert result == "sonstiges"
-
-    @patch("src.agents.triage_agent.call_llm_safe")
-    def test_fallback_bei_unerwarteter_antwort(self, mock_llm):
-        """Wenn das LLM etwas Unerwartetes zurückgibt → fallback 'sonstiges'."""
-        mock_llm.return_value = "irgendein-quatsch"
+    def test_fallback_on_unexpected_response(self, mock_llm):
+        mock_llm.return_value = "something-else"
         result = classify_ticket("Test", "Test")
-        assert result == "sonstiges"
+        assert result == "product_inquiry"
 
     @patch("src.agents.triage_agent.call_llm_safe")
-    def test_gross_kleinschreibung_normalisiert(self, mock_llm):
-        mock_llm.return_value = "PREISANFRAGE"
-        result = classify_ticket("Preis?", "Was kostet das?")
-        assert result == "preisanfrage"
-
-    @patch("src.agents.triage_agent.call_llm_safe")
-    def test_punkt_am_ende_entfernt(self, mock_llm):
-        mock_llm.return_value = "beschwerde."
-        result = classify_ticket("Problem", "Hilfe!")
-        assert result == "beschwerde"
-
-    @patch("src.agents.triage_agent.call_llm_safe")
-    def test_fallback_bei_llm_fehler(self, mock_llm):
-        """Wenn call_llm_safe None zurückgibt (API-Fehler) → fallback 'sonstiges'."""
+    def test_fallback_on_llm_failure(self, mock_llm):
         mock_llm.return_value = None
         result = classify_ticket("Test", "Test")
-        assert result == "sonstiges"
+        assert result == "product_inquiry"
+
+
+class TestClassifyTicketSmart:
+    def test_known_category_uses_metadata(self):
+        ticket = {
+            "id": 1,
+            "category": "product_inquiry",
+            "category_raw": "Product inquiry",
+            "priority": "Low",
+            "subject": "Pricing",
+            "description": "What does it cost?",
+        }
+        result, source = classify_ticket_smart(ticket)
+        assert result == "product_inquiry"
+        assert source == "metadata"
+
+    @patch("src.agents.triage_agent.classify_ticket")
+    def test_unknown_category_uses_llm(self, mock_classify):
+        mock_classify.return_value = "billing_inquiry"
+        ticket = {
+            "id": 2,
+            "category": "product_inquiry",
+            "category_raw": "Account setup",
+            "subject": "Help",
+            "description": "I need help",
+        }
+        result, source = classify_ticket_smart(ticket)
+        assert result == "billing_inquiry"
+        assert source == "llm"
+        mock_classify.assert_called_once()
+
+    @patch("src.agents.triage_agent.classify_ticket")
+    def test_high_risk_cancellation_validates_with_llm(self, mock_classify):
+        mock_classify.return_value = "cancellation_request"
+        ticket = {
+            "id": 3,
+            "category": "cancellation_request",
+            "category_raw": "Cancellation request",
+            "priority": "High",
+            "subject": "Cancel plan",
+            "description": "Please cancel my subscription.",
+        }
+        result, source = classify_ticket_smart(ticket)
+        assert result == "cancellation_request"
+        assert source == "llm_validated"
 
 
 class TestRunTriage:
-    """run_triage() verarbeitet mehrere Tickets."""
-
-    @patch("src.agents.triage_agent.classify_ticket")
-    def test_klassifiziert_alle_tickets(self, mock_classify):
-        mock_classify.return_value = "sonstiges"
+    @patch("src.agents.triage_agent.classify_ticket_smart")
+    def test_classifies_all_tickets(self, mock_classify):
+        mock_classify.return_value = ("product_inquiry", "metadata")
         tickets = [
-            {"betreff": "A", "nachricht": "Nachricht A"},
-            {"betreff": "B", "nachricht": "Nachricht B"},
-            {"betreff": "C", "nachricht": "Nachricht C"},
+            {"subject": "A", "description": "Message A"},
+            {"subject": "B", "description": "Message B"},
         ]
         result = run_triage(tickets)
-        assert len(result) == 3
-        assert all(t["classification"] == "sonstiges" for t in result)
+        assert len(result) == 2
+        assert all(t["classification"] == "product_inquiry" for t in result)

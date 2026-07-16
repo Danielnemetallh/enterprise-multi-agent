@@ -1,0 +1,6 @@
+Ticket ID,Customer Name,Customer Email,Product Purchased,Ticket Type,Ticket Subject,Ticket Description,Ticket Status,Ticket Priority,Ticket Channel,Resolution,Customer Satisfaction Rating
+T-1001,Anna Schmidt,anna@example.com,Cloud-Speicher Pro,Product inquiry,Preis für {product_purchased},Was kostet {product_purchased} im Jahresabo?,Open,Low,Email,,
+T-1002,Ben Mueller,ben@example.com,API-Gateway,Cancellation request,Kündigung meines Vertrags,Hiermit kündige ich meinen Vertrag.,Open,High,Phone,,
+T-1003,Clara Weber,clara@example.com,VPN-Service,Technical issue,Server-Ausfall,Unser Zugang war 4 Stunden offline.,Closed,Medium,Chat,Issue resolved,4
+T-1004,Daniel Koch,daniel@example.com,Monitoring Lite,Refund request,Rückerstattung,Bitte erstatten Sie die letzte Rechnung.,Open,High,Email,,
+T-1005,Eva Braun,eva@example.com,KI-Chatbot,Billing inquiry,Rechnungsfrage,Wo finde ich meine Rechnung für {product_purchased}?,Pending Customer Response,Low,Email,,

@@ -1,135 +1,115 @@
 """
-HITL-Testskript: Testet den Human-in-the-Loop mit einer Kündigung
-===============================================================
-Läuft die Agenten einzeln durch, bis zum HITL-Stopp.
-Dann kannst du "ja", "nein" oder "eigen" (KI-Vorschlag) eingeben.
+HITL test script: exercises human-in-the-loop with a cancellation ticket.
+Runs agents step by step until the HITL stop.
 
-Ausführung: python src/test_hitl.py
+Usage: python src/test_hitl.py
 """
 
+import json
 import os
 import sys
-import json
 
-# Projekt-Verzeichnis zum Python-Pfad hinzufügen
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from src.tools.llm import get_llm, extract_json
-from src.tools.db_tools import query_customer, query_kunden_historie, query_open_tickets
-from src.agents.triage_agent import classify_ticket
 from src.agents.executive_agent import run_executive
+from src.agents.triage_agent import classify_ticket
+from src.tools.llm import extract_json, get_llm
+from src.tools.policy import evaluate_policy
+from src.tools.db_tools import query_open_tickets
 
-# ─── Kündigungs-Ticket aus DB holen ───
-tickets = [t for t in query_open_tickets() if t["typ"] == "kuendigung"]
+tickets = [ticket for ticket in query_open_tickets() if ticket["category"] == "cancellation_request"]
 if not tickets:
-    print("❌ Keine Kündigungs-Tickets gefunden!")
+    print("No open cancellation tickets found.")
     sys.exit(1)
 
-r_vals = (tickets[0]["id"], tickets[0]["kunden_id"], tickets[0]["typ"],
-          tickets[0]["betreff"], tickets[0]["nachricht"],
-          tickets[0]["kunde"], tickets[0]["email"])
+ticket = tickets[0]
 
-print("\n" + "="*50)
-print("🧪 HITL-TEST: Kündigung verarbeiten")
-print("="*50)
-print(f"\n📧 Ticket #{r_vals[0]}")
-print(f"   Kunde:  {r_vals[5]}")
-print(f"   Betreff: {r_vals[3]}")
-print(f"   Nachricht: {r_vals[4][:150]}...")
+print("\n" + "=" * 50)
+print("HITL TEST: Process cancellation")
+print("=" * 50)
+print(f"\nTicket #{ticket['id']} ({ticket['ticket_id']})")
+print(f"  Customer: {ticket['customer_name']} <{ticket['customer_email']}>")
+print(f"  Subject: {ticket['subject']}")
+print(f"  Description: {ticket['description'][:150]}...")
 
-# ─── 1. Triage ───
-print(f"\n--- 1️⃣  Triage-Agent ---")
-classification = classify_ticket(r_vals[3], r_vals[4])
-print(f"   → Klassifikation: {classification.upper()}")
+print("\n--- 1. Triage Agent ---")
+classification = classify_ticket(ticket["subject"], ticket["description"])
+print(f"  -> Classification: {classification}")
 
-# ─── 2. Data-Fetcher ───
-print(f"\n--- 2️⃣  Data-Fetcher ---")
-kunde = query_customer(r_vals[1])
-historie = query_kunden_historie(r_vals[1])
-collected = {"kunde": kunde, "historie": historie}
-print(f"   → Kunde: {kunde['name']} ({kunde['status']}, {kunde['vertragstyp']})")
-print(f"   → Historie: {len(historie['orders'])} Bestellungen, {len(historie['tickets'])} Tickets")
-
-# ─── 3. Executive ───
-print(f"\n--- 3️⃣  Executive-Agent ---")
+print("\n--- 2. Executive Agent ---")
+collected = {"ticket": ticket}
 action = run_executive(classification, collected)
-print(f"   → Vorschlag: {action['typ']} | Rabatt: {action['wert']}%")
-print(f"   → Betreff: {action.get('betreff', '?')}")
-print(f"   → Nachricht: {action.get('nachricht', '?')}")
+print(f"  -> Proposal: {action['action_type']} | Discount: {action['discount_percent']}%")
+print(f"  -> Subject: {action.get('subject', '?')}")
+print(f"  -> Customer Draft: {action.get('customer_message', '?')}")
 
-# ─── 4. HITL-Prüfung ───
-print(f"\n--- 4️⃣  HITL-Prüfung ---")
-kritisch = action.get("kritisch", action.get("wert", 0) > 15)
-print(f"   → Kritisch? {'JA 🚷' if kritisch else 'NEIN ✅'}")
-
-
-def zeige_vorschlag(aktion):
-    """Zeigt einen Aktionsvorschlag schön formatiert an."""
-    print(f"\n  Vorschlag:")
-    print(f"  Typ:      {aktion['typ']}")
-    print(f"  Rabatt:   {aktion['wert']}%")
-    print(f"  Betreff:  {aktion.get('betreff', '?')}")
-    print(f"  Nachricht: {aktion.get('nachricht', '?')}")
+print("\n--- 3. HITL Check ---")
+requires_approval = action.get("requires_approval", False)
+print(f"  -> Requires approval? {'YES' if requires_approval else 'NO'}")
 
 
-if kritisch:
+def show_proposal(proposal: dict) -> None:
+    print("\n  Proposal:")
+    print(f"  Action:   {proposal['action_type']}")
+    print(f"  Discount: {proposal['discount_percent']}%")
+    print(f"  Subject:  {proposal.get('subject', '?')}")
+    print(f"  Draft:    {proposal.get('customer_message', '?')}")
+
+
+if requires_approval:
     while True:
-        print(f"\n{'='*50}")
-        print("🚷 FREIGABE ERFORDERLICH – kritische Aktion!")
-        print(f"{'='*50}")
-        zeige_vorschlag(action)
-        print()
+        print("\n" + "=" * 50)
+        print("APPROVAL REQUIRED")
+        print("=" * 50)
+        show_proposal(action)
 
-        # HITL: Auf Benutzereingabe warten!
-        inp = input("  Aktion freigeben? (ja/nein/eigen): ").strip().lower()
+        response = input("  Approve action? (yes/no/alternative): ").strip().lower()
 
-        if inp in ("ja", "yes"):
-            print(f"\n  ✅ FREIGEGEBEN – Aktion wird ausgeführt!")
-            print(f"  📨 {action.get('nachricht', '?')}")
+        if response in ("yes", "ja"):
+            print("\n  APPROVED - action would be executed.")
+            print(f"  Draft: {action.get('customer_message', '?')}")
             break
 
-        elif inp in ("nein", "no"):
-            print(f"\n  ❌ ABGELEHNT – Aktion wurde NICHT ausgeführt.")
+        if response in ("no", "nein"):
+            print("\n  REJECTED - action would not be executed.")
             break
 
-        elif inp == "eigen":
-            print(f"\n  🤖 KI erstellt Alternativ-Vorschlag...")
+        if response in ("alternative", "eigen"):
+            print("\n  Generating alternative proposal...")
             prompt = f"""The human reviewer rejected this proposed action:
 {json.dumps(action, indent=2, ensure_ascii=False)}
 
-Based on the SAME customer data, suggest a DIFFERENT approach.
-Think creatively — what else could we offer the customer?
+Based on the SAME ticket details, suggest a DIFFERENT approach.
 
 Respond with a JSON object:
 {{
-    "typ": "angebot|entschuldigung|info|storno",
-    "wert": <number 0-30>,
-    "betreff": "<short subject in German>",
-    "nachricht": "<alternative response in German, max 2 Sätze>",
-    "kritisch": true/false
+    "action_type": "offer_discount|send_apology|provide_information|process_cancellation",
+    "discount_percent": <number 0-30>,
+    "subject": "<short subject in English>",
+    "customer_message": "<alternative response in English, max 2 sentences>",
+    "business_reason": "<short internal reason>"
 }}"""
             llm = get_llm(temperature=0.3)
             resp = llm.invoke(prompt)
-            result = resp.content.strip()
-
             try:
                 action = extract_json(resp.content)
-                action.setdefault("typ", "info")
-                action.setdefault("wert", 0)
-                action.setdefault("betreff", "Alternativ-Vorschlag")
-                action.setdefault("nachricht", "Wir haben einen neuen Vorschlag für Sie.")
-                action.setdefault("kritisch", action.get("wert", 0) > 15)
-                print(f"\n  → Neuer Vorschlag erstellt!")
-                # while-Schleife zeigt den neuen Vorschlag
-            except (json.JSONDecodeError, IndexError) as e:
-                print(f"  ⚠️ Konnte Vorschlag nicht parsen: {e}")
-                print("  → Bitte nochmal eingeben")
+                action.setdefault("action_type", "provide_information")
+                action.setdefault("discount_percent", 0)
+                action.setdefault("subject", "Alternative proposal")
+                action.setdefault(
+                    "customer_message",
+                    "We have prepared an alternative response for you.",
+                )
+                action = evaluate_policy(action, classification, ticket)
+                print("\n  -> New proposal created.")
+            except (json.JSONDecodeError, IndexError) as exc:
+                print(f"  Could not parse proposal: {exc}")
         else:
-            print("  ⚠️ Bitte 'ja', 'nein' oder 'eigen' eingeben.")
+            print("  Please enter 'yes', 'no', or 'alternative'.")
 else:
-    print(f"\n  ✅ Nicht kritisch – Aktion wird automatisch ausgeführt:")
-    print(f"  📨 {action.get('nachricht', '?')}")
+    print("\n  Auto-approved - action would be executed:")
+    print(f"  Draft: {action.get('customer_message', '?')}")
 
-print(f"\n{'='*50}")
-print("✅ Test abgeschlossen!")
-print(f"{'='*50}")
+print("\n" + "=" * 50)
+print("Test complete.")
+print("=" * 50)
