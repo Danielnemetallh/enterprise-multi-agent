@@ -41,6 +41,17 @@ Trage für echte Modellaufrufe `DEEPSEEK_API_KEY` in `.env` ein. Tests verwenden
 
 `doctor` prüft standardmäßig nur die lokale Konfiguration. Nur `doctor --live` sendet einen expliziten DeepSeek-Smoke-Test.
 
+## Frontend-Demo
+
+Die interviewfähige Operations-Oberfläche liegt in `app.py` und verwendet dieselbe Service-Grenze wie die CLI. Sie zeigt Ticket-Warteschlange, Agenten-Timeline, Vorschlag, deterministische Policy-Entscheidung und den Human-in-the-loop-Schritt gemeinsam in einer Ansicht.
+
+```powershell
+uv pip install --python .venv/Scripts/python.exe -r requirements.txt
+.venv/Scripts/python.exe -m streamlit run app.py
+```
+
+Wenn die Datenbank leer ist, kann die synthetische CSV-Demo über `Demo-Ticketwarteschlange laden` in der Seitenleiste importiert werden. `Agenten für dieses Ticket starten` startet den echten resumierbaren Workflow; ein Lauf mit Freigabepflicht erscheint als sichtbare menschliche Prüfstelle.
+
 ## Drei-Minuten-Demo
 
 1. `seed --force` lädt fünf synthetische Tickets.
