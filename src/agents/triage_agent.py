@@ -7,6 +7,7 @@ Calls the LLM only for missing, unknown, or high-risk categories.
 
 import logging
 
+from src.models.resolution import ProposalValidationError, ProviderFailure
 from src.tools.llm import call_llm_safe
 from src.tools.ticket_schema import INTERNAL_CATEGORIES, should_use_llm_for_triage
 
@@ -37,16 +38,13 @@ def classify_ticket(subject: str, description: str) -> str:
     )
     result = call_llm_safe(prompt, temperature=0.0)
     if not result:
-        logger.warning("LLM call failed -> fallback product_inquiry")
-        return "product_inquiry"
+        raise ProviderFailure("DeepSeek did not return a triage classification")
 
     result = result.strip().lower().rstrip(".")
 
-    for category in CATEGORIES:
-        if category in result:
-            return category
-    logger.warning("Unexpected LLM response '%s' -> fallback product_inquiry", result)
-    return "product_inquiry"
+    if result in CATEGORIES:
+        return result
+    raise ProposalValidationError(f"Invalid triage classification: {result}")
 
 
 def classify_ticket_smart(ticket: dict) -> tuple[str, str]:

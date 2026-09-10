@@ -4,11 +4,12 @@ LLM-Konfiguration — DeepSeek via OpenAI-kompatibler API
 Nutzt python-dotenv für API-Key aus .env
 """
 
+import json
+import logging
 import os
 import re
-import json
 import time
-import logging
+
 from dotenv import load_dotenv
 from langchain_openai import ChatOpenAI
 

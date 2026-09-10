@@ -2,6 +2,8 @@
 from unittest.mock import patch
 
 import pytest
+from langgraph.checkpoint.memory import MemorySaver
+from langgraph.types import Command
 
 from src.graph.workflow import build_graph
 
@@ -22,6 +24,12 @@ def mock_ticket():
     }
 
 
+@pytest.fixture(autouse=True)
+def mock_ticket_finalization():
+    with patch("src.graph.workflow.mark_ticket_processed"):
+        yield
+
+
 def _initial_state():
     return {
         "input": "",
@@ -33,7 +41,7 @@ def _initial_state():
         "proposed_action": {},
         "approval": "pending",
         "workflow_trace": [],
-        "execution_result": "",
+        "finalization_result": "",
     }
 
 
@@ -59,18 +67,16 @@ class TestGraphIntegration:
         assert result["classification"] == "product_inquiry"
         assert result["ticket"] is not None
         assert result["proposed_action"]["action_type"] == "offer_discount"
-        assert result["approval"] == "approved"
+        assert result["approval"] == "not_required"
         assert result["workflow_trace"]
         mock_exec.assert_called_once()
 
-    @patch("builtins.input")
     @patch("src.graph.workflow.query_open_tickets")
     @patch("src.graph.workflow.classify_ticket_smart")
     @patch("src.graph.workflow.run_executive")
-    def test_cancellation_flow(self, mock_exec, mock_classify, mock_tickets, mock_input, mock_ticket):
+    def test_cancellation_flow(self, mock_exec, mock_classify, mock_tickets, mock_ticket):
         mock_tickets.return_value = [mock_ticket]
         mock_classify.return_value = ("cancellation_request", "metadata")
-        mock_input.return_value = "yes"
         mock_exec.return_value = {
             "action_type": "process_cancellation",
             "discount_percent": 0,
@@ -81,12 +87,15 @@ class TestGraphIntegration:
             "approval_reason": "Cancellation requests require human approval",
         }
 
-        graph = build_graph()
-        result = graph.invoke(_initial_state())
+        graph = build_graph(checkpointer=MemorySaver())
+        config = {"configurable": {"thread_id": "RUN-TEST-CANCEL"}}
+        interrupted = graph.invoke(_initial_state(), config=config)
+        result = graph.invoke(Command(resume={"decision": "approve"}), config=config)
 
         assert result["classification"] == "cancellation_request"
         assert result["proposed_action"]["requires_approval"] is True
         assert result["approval"] == "approved"
+        assert interrupted["__interrupt__"]
 
     @patch("src.graph.workflow.query_open_tickets")
     @patch("src.graph.workflow.classify_ticket_smart")
@@ -125,9 +134,11 @@ class TestGraphIntegration:
             "approval_reason": "Discount 20% exceeds the 15% policy limit",
         }
 
-        with patch("builtins.input", return_value="yes"):
-            graph = build_graph()
-            result = graph.invoke(_initial_state())
+        graph = build_graph(checkpointer=MemorySaver())
+        config = {"configurable": {"thread_id": "RUN-TEST-DISCOUNT"}}
+        interrupted = graph.invoke(_initial_state(), config=config)
+        result = graph.invoke(Command(resume={"decision": "approve"}), config=config)
 
         assert result["proposed_action"]["requires_approval"] is True
-        assert "HITL -> approved" in result["workflow_trace"][-2]
+        assert interrupted["__interrupt__"]
+        assert "Review -> approved" in result["workflow_trace"][-2]

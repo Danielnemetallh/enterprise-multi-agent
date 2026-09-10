@@ -13,7 +13,8 @@
     "priority": "Ticket Priority",
     "channel": "Ticket Channel",
     "resolution": "Resolution",
-    "satisfaction_rating": "Customer Satisfaction Rating"
+    "satisfaction_rating": "Customer Satisfaction Rating",
+    "created_at": "Created At"
   },
   "category_map": {
     "Cancellation request": "cancellation_request",

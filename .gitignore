@@ -32,5 +32,3 @@ openspec/
 .claude/
 opencode.json
 course-architecture.html
-CLAUDE.md
-src/test_hitl.py

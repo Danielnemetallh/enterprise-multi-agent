@@ -9,7 +9,6 @@ import pytest
 from src.tools import db_tools
 from src.tools.import_tickets import import_tickets_from_csv, normalize_ticket_row
 
-
 FIXTURE_CSV = os.path.join(os.path.dirname(__file__), "fixtures", "kaggle_sample.csv")
 MAPPING_JSON = os.path.join(
     os.path.dirname(__file__), "..", "data", "mappings", "kaggle_support.json"
@@ -52,11 +51,12 @@ class TestImportTickets:
         import_tickets_from_csv(FIXTURE_CSV, MAPPING_JSON, force=True)
         with sqlite3.connect(temp_db) as conn:
             rows = conn.execute(
-                "SELECT category, status, ticket_id FROM support_tickets "
+                "SELECT category, status, ticket_id, category_raw FROM support_tickets "
                 "WHERE source_dataset = 'kaggle_customer_support' ORDER BY ticket_id"
             ).fetchall()
 
         assert rows[0][0] == "product_inquiry"
+        assert rows[0][3] == "Product inquiry"
         assert rows[1][0] == "cancellation_request"
         assert rows[2][0] == "technical_issue"
         assert rows[2][1] == "closed"
@@ -75,6 +75,7 @@ class TestImportTickets:
         row = df.iloc[1]
         ticket = normalize_ticket_row(row, mapping)
         assert ticket["category"] == "cancellation_request"
+        assert ticket["category_raw"] == "Cancellation request"
         assert ticket["priority"] == "High"
         assert ticket["source_dataset"] == "kaggle_customer_support"
         assert ticket["customer_name"] == "Ben Mueller"

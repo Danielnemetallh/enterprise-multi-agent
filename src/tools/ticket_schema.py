@@ -10,6 +10,8 @@ INTERNAL_CATEGORIES = (
     "billing_inquiry",
 )
 
+UNKNOWN_CATEGORY = "unknown"
+
 INTERNAL_STATUSES = ("open", "pending", "closed")
 
 DEFAULT_CATEGORY_MAP = {
@@ -47,14 +49,14 @@ REQUIRED_CSV_HEADERS = (
 def normalize_category(raw: str | None, category_map: dict | None = None) -> tuple[str, str | None]:
     """Map external category to internal category. Returns (category, raw_category)."""
     if not raw or not str(raw).strip():
-        return "product_inquiry", None
+        return UNKNOWN_CATEGORY, None
 
     raw_str = str(raw).strip()
     mapping = {k.lower(): v for k, v in (category_map or DEFAULT_CATEGORY_MAP).items()}
     normalized = mapping.get(raw_str.lower())
     if normalized:
         return normalized, raw_str
-    return "product_inquiry", raw_str
+    return UNKNOWN_CATEGORY, raw_str
 
 
 def normalize_status(raw: str | None, status_map: dict | None = None) -> str:

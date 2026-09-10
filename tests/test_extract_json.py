@@ -2,7 +2,9 @@
 Tests für extract_json() — die JSON-Extraktions-Helferfunktion.
 """
 import json
+
 import pytest
+
 from src.tools.llm import extract_json
 
 

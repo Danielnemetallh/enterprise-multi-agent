@@ -92,6 +92,7 @@ def normalize_ticket_row(row: pd.Series, mapping: dict) -> dict:
         "source_dataset": source_dataset,
         "category_raw": category_raw or raw_category,
         "processed_at": None,
+        "created_at": _get_value(row, columns.get("created_at")),
     }
 
 
