@@ -10,6 +10,7 @@ from src.tools.llm import (
     call_llm_safe,
     get_llm,
     get_llm_config,
+    set_demo_mode_override,
 )
 
 CONFIG_VARS = (
@@ -58,6 +59,21 @@ def test_legacy_configuration_remains_compatible(monkeypatch):
     assert config.base_url == "https://legacy.example"
     assert config.model == "legacy-model"
     assert config.is_configured is True
+
+
+def test_demo_mode_can_be_overridden_for_an_interactive_session(monkeypatch):
+    _clear_config(monkeypatch)
+    monkeypatch.setenv("SUPPORTFLOW_DEMO_MODE", "false")
+
+    assert get_llm_config().demo_mode is False
+
+    set_demo_mode_override(True)
+    assert get_llm_config().demo_mode is True
+
+    set_demo_mode_override(False)
+    assert get_llm_config().demo_mode is False
+
+    set_demo_mode_override(None)
 
 
 def test_missing_live_configuration_is_explicit_and_secret_free(monkeypatch):

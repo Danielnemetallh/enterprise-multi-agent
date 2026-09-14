@@ -7,6 +7,7 @@ import logging
 import os
 import re
 import time
+from contextvars import ContextVar
 from dataclasses import dataclass
 
 from dotenv import load_dotenv
@@ -20,6 +21,9 @@ GENERIC_API_KEY = "LLM_API_KEY"
 GENERIC_BASE_URL = "LLM_BASE_URL"
 GENERIC_MODEL = "LLM_MODEL"
 DEMO_MODE = "SUPPORTFLOW_DEMO_MODE"
+_demo_mode_override: ContextVar[bool | None] = ContextVar(
+    "supportflow_demo_mode_override", default=None
+)
 
 
 class ProviderConfigurationError(ValueError):
@@ -47,14 +51,20 @@ def _env_flag(name: str) -> bool:
     return (os.getenv(name) or "").strip().lower() in {"1", "true", "yes", "on"}
 
 
+def set_demo_mode_override(enabled: bool | None) -> None:
+    """Set a per-execution override used by interactive clients such as Streamlit."""
+    _demo_mode_override.set(enabled)
+
+
 def get_llm_config() -> LLMConfig:
     """Resolve generic settings, with legacy provider aliases as fallback."""
+    mode_override = _demo_mode_override.get()
     return LLMConfig(
         provider=(os.getenv("LLM_PROVIDER") or "").strip() or None,
         api_key=_setting(GENERIC_API_KEY, "DEEPSEEK_API_KEY"),
         base_url=_setting(GENERIC_BASE_URL, "DEEPSEEK_BASE_URL"),
         model=_setting(GENERIC_MODEL, "DEEPSEEK_MODEL"),
-        demo_mode=_env_flag(DEMO_MODE),
+        demo_mode=_env_flag(DEMO_MODE) if mode_override is None else mode_override,
     )
 
 

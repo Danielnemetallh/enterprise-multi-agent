@@ -18,7 +18,7 @@ from src.services.support_operations import (
 )
 from src.tools import db_tools
 from src.tools.import_tickets import import_tickets_from_csv
-from src.tools.llm import get_llm_config
+from src.tools.llm import get_llm_config, set_demo_mode_override
 
 PROJECT_ROOT = Path(__file__).resolve().parent
 DEMO_CSV = PROJECT_ROOT / "data" / "synthetic_support_tickets.csv"
@@ -257,6 +257,17 @@ def stage_state(stage_key: str, run: dict | None) -> str:
 
 
 def render_sidebar(queue: list[dict], pending: list[dict]) -> None:
+    base_llm_config = get_llm_config()
+    st.session_state.setdefault("streamlit_demo_mode", base_llm_config.demo_mode)
+    demo_mode = st.sidebar.toggle(
+        "Interview-Demo-Modus",
+        key="streamlit_demo_mode",
+        help=(
+            "Aktiv: deterministische Antworten ohne Modellaufruf. "
+            "Deaktiviert: der konfigurierte Live-Modellanbieter wird verwendet."
+        ),
+    )
+    set_demo_mode_override(demo_mode)
     st.sidebar.markdown(
         '<div class="brand-lockup"><div class="brand-mark">✦</div><div><div class="brand-name">SupportFlow</div><div class="brand-sub">Kontrollierte KI-Unterstützung</div></div></div>',
         unsafe_allow_html=True,
@@ -273,7 +284,7 @@ def render_sidebar(queue: list[dict], pending: list[dict]) -> None:
         unsafe_allow_html=True,
     )
     st.sidebar.markdown('<div class="section-spacer"></div>', unsafe_allow_html=True)
-    st.sidebar.markdown('<div class="eyebrow">Demo-Steuerung</div>', unsafe_allow_html=True)
+    st.sidebar.markdown('<div class="eyebrow">Datensatz & Arbeitsmodus</div>', unsafe_allow_html=True)
     if st.sidebar.button("Demo-Ticketwarteschlange laden", width="stretch"):
         loaded = seed_demo_dataset()
         st.session_state["notice"] = (
@@ -309,6 +320,14 @@ def render_sidebar(queue: list[dict], pending: list[dict]) -> None:
         f'<div class="key-row"><span>Modell</span><span>{safe_text(model_name)}</span></div>',
         unsafe_allow_html=True,
     )
+    if llm_config.demo_mode:
+        st.sidebar.success("Demo aktiv · deterministisch · kein Modellaufruf")
+    elif llm_config.is_configured:
+        st.sidebar.info("Live aktiv · Modellaufruf über die konfigurierte Umgebung")
+    else:
+        st.sidebar.warning(
+            "Live ausgewählt, aber die Modellkonfiguration ist unvollständig."
+        )
 
 
 def render_metrics(queue: list[dict], pending: list[dict], runs: list[dict]) -> None:
@@ -529,6 +548,7 @@ def render_review_panel(run: dict | None) -> None:
 
 def main() -> None:
     inject_styles()
+    set_demo_mode_override(None)
     queue, pending, runs = load_data()
     render_sidebar(queue, pending)
 
