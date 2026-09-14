@@ -1,7 +1,10 @@
 """Tests for triage agent classification."""
 from unittest.mock import patch
 
+import pytest
+
 from src.agents.triage_agent import classify_ticket, classify_ticket_smart, run_triage
+from src.models.resolution import ProposalValidationError, ProviderFailure
 
 
 class TestClassifyTicket:
@@ -24,16 +27,16 @@ class TestClassifyTicket:
         assert result == "cancellation_request"
 
     @patch("src.agents.triage_agent.call_llm_safe")
-    def test_fallback_on_unexpected_response(self, mock_llm):
+    def test_unexpected_response_fails_validation(self, mock_llm):
         mock_llm.return_value = "something-else"
-        result = classify_ticket("Test", "Test")
-        assert result == "product_inquiry"
+        with pytest.raises(ProposalValidationError):
+            classify_ticket("Test", "Test")
 
     @patch("src.agents.triage_agent.call_llm_safe")
-    def test_fallback_on_llm_failure(self, mock_llm):
+    def test_provider_failure_is_visible(self, mock_llm):
         mock_llm.return_value = None
-        result = classify_ticket("Test", "Test")
-        assert result == "product_inquiry"
+        with pytest.raises(ProviderFailure):
+            classify_ticket("Test", "Test")
 
 
 class TestClassifyTicketSmart:

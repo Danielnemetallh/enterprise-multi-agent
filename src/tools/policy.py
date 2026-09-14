@@ -3,6 +3,8 @@ Deterministic business policy layer for executive actions.
 LLM proposes — code enforces approval rules.
 """
 
+import math
+
 RISK_LOW = "low"
 RISK_MEDIUM = "medium"
 RISK_HIGH = "high"
@@ -65,7 +67,13 @@ def evaluate_policy(
 
     Returns the action enriched with policy fields and approval outcome.
     """
-    discount = float(action.get("discount_percent", 0) or 0)
+    raw_discount = action.get("discount_percent", 0)
+    try:
+        discount = float(raw_discount)
+        discount_is_valid = math.isfinite(discount) and 0 <= discount <= 30
+    except (TypeError, ValueError):
+        discount = 0.0
+        discount_is_valid = False
     action_type = action.get("action_type", "provide_information")
     customer_message = action.get("customer_message", "") or "We will follow up on your request shortly."
     priority = (ticket or {}).get("priority")
@@ -75,6 +83,10 @@ def evaluate_policy(
     business_reasons: list[str] = []
     rejected = False
     rejection_reason = None
+
+    if not discount_is_valid:
+        rejected = True
+        rejection_reason = "Discount must be a finite number between 0 and 30"
 
     if action_type not in policy["allowed_actions"]:
         rejected = True
@@ -120,8 +132,10 @@ def evaluate_policy(
         "business_reason": action.get("business_reason") or (
             "; ".join(business_reasons) if business_reasons else policy["guidance"]
         ),
-        "risk_level": action.get("risk_level", risk),
+        "risk_level": risk,
         "alternatives": alternatives or [],
+        "decision_source": "deterministic_policy",
+        "policy_rules": approval_reasons + ([rejection_reason] if rejection_reason else []),
         "policy_outcome": "rejected" if rejected else (
             "needs_approval" if requires_approval else "auto_approved"
         ),

@@ -1,7 +1,9 @@
 """Tests for the executive agent with mocked LLM calls."""
 from unittest.mock import patch
 
-from src.agents.executive_agent import run_executive
+import pytest
+
+from src.agents.executive_agent import ProposalValidationError, ProviderFailure, run_executive
 
 
 def _ticket(**overrides):
@@ -25,8 +27,8 @@ class TestRunExecutive:
         mock_llm.return_value = """{
             "action_type": "offer_discount",
             "discount_percent": 10,
-            "subject": "Your refund request",
-            "customer_message": "We can offer you a 10% discount.",
+            "subject": "Ihre Erstattungsanfrage",
+            "customer_message": "Wir können Ihnen einen Rabatt von 10 % anbieten.",
             "business_reason": "Partial goodwill offer for refund request"
         }"""
         result = run_executive("refund_request", {"ticket": _ticket()})
@@ -48,11 +50,10 @@ class TestRunExecutive:
         assert result["requires_approval"] is True
 
     @patch("src.agents.executive_agent.call_llm_safe")
-    def test_fallback_on_parse_error(self, mock_llm):
+    def test_parse_error_fails_the_run(self, mock_llm):
         mock_llm.return_value = "not json"
-        result = run_executive("product_inquiry", {"ticket": _ticket()})
-        assert result["action_type"] == "provide_information"
-        assert result["discount_percent"] == 0
+        with pytest.raises(ProposalValidationError):
+            run_executive("product_inquiry", {"ticket": _ticket()})
 
     @patch("src.agents.executive_agent.call_llm_safe")
     def test_markdown_code_block(self, mock_llm):
@@ -60,8 +61,8 @@ class TestRunExecutive:
 {
     "action_type": "provide_information",
     "discount_percent": 0,
-    "subject": "Your inquiry",
-    "customer_message": "We will follow up shortly.",
+            "subject": "Ihre Anfrage",
+            "customer_message": "Wir melden uns in Kürze bei Ihnen.",
     "business_reason": "Standard information response"
 }
 ```"""
@@ -69,27 +70,46 @@ class TestRunExecutive:
         assert result["action_type"] == "provide_information"
 
     @patch("src.agents.executive_agent.call_llm_safe")
-    def test_defaults_applied_when_missing(self, mock_llm):
+    def test_missing_required_fields_fail_validation(self, mock_llm):
         mock_llm.return_value = '{"action_type": "offer_discount"}'
-        result = run_executive("billing_inquiry", {"ticket": _ticket()})
-        assert result["discount_percent"] == 0
-        assert result["subject"]
-        assert result["customer_message"]
+        with pytest.raises(ProposalValidationError):
+            run_executive("billing_inquiry", {"ticket": _ticket()})
 
     @patch("src.agents.executive_agent.call_llm_safe")
-    def test_fallback_on_llm_failure(self, mock_llm):
+    def test_provider_failure_is_visible(self, mock_llm):
         mock_llm.return_value = None
-        result = run_executive("billing_inquiry", {"ticket": _ticket()})
-        assert result["action_type"] == "provide_information"
-        assert result["discount_percent"] == 0
+        with pytest.raises(ProviderFailure):
+            run_executive("billing_inquiry", {"ticket": _ticket()})
+
+    @patch("src.agents.executive_agent.call_llm_safe")
+    def test_customer_draft_cannot_expose_policy_terms(self, mock_llm):
+        mock_llm.return_value = """{
+            "action_type": "provide_information",
+            "discount_percent": 0,
+            "subject": "Ihre Anfrage",
+            "customer_message": "Unsere Richtlinie erfordert eine Freigabe."
+        }"""
+        with pytest.raises(ProposalValidationError):
+            run_executive("product_inquiry", {"ticket": _ticket()})
+
+    @patch("src.agents.executive_agent.call_llm_safe")
+    @pytest.mark.parametrize("discount", [-1, 31, "NaN", "Infinity"])
+    def test_invalid_discounts_fail_validation(self, mock_llm, discount):
+        mock_llm.return_value = (
+            '{"action_type":"offer_discount","discount_percent":'
+            + (f'"{discount}"' if isinstance(discount, str) else str(discount))
+            + ',"subject":"Angebot","customer_message":"Wir bieten Ihnen einen Rabatt an."}'
+        )
+        with pytest.raises(ProposalValidationError):
+            run_executive("refund_request", {"ticket": _ticket()})
 
     @patch("src.agents.executive_agent.call_llm_safe")
     def test_prompt_receives_ticket_text(self, mock_llm):
         mock_llm.return_value = """{
             "action_type": "provide_information",
             "discount_percent": 0,
-            "subject": "Your inquiry",
-            "customer_message": "Thanks for your question.",
+            "subject": "Ihre Anfrage",
+            "customer_message": "Vielen Dank für Ihre Frage.",
             "business_reason": "Product inquiry"
         }"""
         run_executive("product_inquiry", {"ticket": _ticket(

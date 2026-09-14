@@ -1,19 +1,20 @@
-"""
-Executive Agent (Agent 3) — Creates policy-compatible solution proposals
-======================================================================
-LLM proposes — policy layer enforces approval rules deterministically.
-"""
+"""Resolution agent: create a typed proposal for deterministic policy evaluation."""
 
-import json
 import logging
 
-from src.tools.llm import call_llm_safe, extract_json
+from src.models.resolution import (
+    ProposalValidationError,
+    ProviderFailure,
+    parse_resolution_proposal,
+)
+from src.tools.case_file import customer_draft_is_clean
+from src.tools.llm import call_llm_safe
 from src.tools.policy import evaluate_policy
 
 logger = logging.getLogger(__name__)
 
-PROMPT_TEMPLATE = """You are an executive agent for a customer support system.
-Based on the ticket details below, decide on the best action.
+PROMPT_TEMPLATE = """You are a resolution agent for a controlled customer support system.
+Create a proposed response for the ticket below. Deterministic policy code decides risk and approval.
 
 Classification: {classification}
 Priority: {priority}
@@ -30,8 +31,8 @@ Respond with a JSON object (ONLY JSON, no other text):
 {{
     "action_type": "offer_discount|send_apology|provide_information|process_cancellation",
     "discount_percent": <number 0-30>,
-    "subject": "<short subject in English>",
-    "customer_message": "<response message to customer in English, max 2 sentences, no internal labels>",
+    "subject": "<short subject in German>",
+    "customer_message": "<response message to customer in German, max 2 sentences, no internal labels>",
     "business_reason": "<short internal reason in English>",
     "alternatives": ["<optional alternative 1>", "<optional alternative 2>"]
 }}
@@ -42,7 +43,7 @@ Rules:
 - provide_information for product or billing questions
 - process_cancellation for cancellation requests
 - discount_percent only > 0 when action_type == "offer_discount"
-- customer_message must be professional English for the customer only
+- customer_message and subject must be professional German for the customer only
 - do NOT mention policy, approval, LLM, or internal risk labels in customer_message
 
 Examples:
@@ -52,32 +53,6 @@ Examples:
 - product_inquiry -> provide_information, discount 0
 - billing_inquiry -> provide_information or offer_discount up to 10%
 """
-
-
-def _normalize_llm_action(action: dict) -> dict:
-    """Map LLM fields to the policy-ready shape."""
-    action_type = action.get("action_type", "provide_information")
-    discount = action.get("discount_percent", 0)
-    customer_message = action.get("customer_message", "") or "We will follow up on your request shortly."
-
-    return {
-        **action,
-        "action_type": action_type,
-        "discount_percent": discount,
-        "subject": action.get("subject", "Your support request"),
-        "customer_message": customer_message,
-        "business_reason": action.get("business_reason"),
-        "alternatives": action.get("alternatives", []),
-    }
-
-
-def _fallback_action() -> dict:
-    return {
-        "action_type": "provide_information",
-        "discount_percent": 0,
-        "subject": "Your support request",
-        "customer_message": "We will follow up on your request shortly.",
-    }
 
 
 def run_executive(classification: str, collected_data: dict) -> dict:
@@ -102,12 +77,12 @@ def run_executive(classification: str, collected_data: dict) -> dict:
 
     result = call_llm_safe(prompt, temperature=0.0)
     if not result:
-        logger.warning("Executive: LLM call failed, using fallback action")
-        return evaluate_policy(_fallback_action(), classification, ticket)
+        raise ProviderFailure("Configured model provider did not return a resolution proposal")
 
     try:
-        action = extract_json(result)
-        action = _normalize_llm_action(action)
+        action = parse_resolution_proposal(result)
+        if not customer_draft_is_clean(action["customer_message"]):
+            raise ProposalValidationError("Customer draft exposes internal policy terms")
         action = evaluate_policy(action, classification, ticket)
 
         logger.info(
@@ -119,6 +94,6 @@ def run_executive(classification: str, collected_data: dict) -> dict:
         )
         return action
 
-    except (json.JSONDecodeError, IndexError) as exc:
-        logger.warning("Executive: could not parse response: %s", exc)
-        return evaluate_policy(_fallback_action(), classification, ticket)
+    except ProposalValidationError:
+        logger.warning("Executive: provider returned an invalid proposal")
+        raise

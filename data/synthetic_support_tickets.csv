@@ -1,0 +1,6 @@
+Ticket ID,Customer Name,Customer Email,Product Purchased,Ticket Type,Ticket Subject,Ticket Description,Ticket Status,Ticket Priority,Ticket Channel,Resolution,Customer Satisfaction Rating,Created At
+DEMO-001,Anna Beispiel,anna@example.com,Cloud-Speicher Pro,Product inquiry,Preis für {product_purchased}?,Was kostet das Jahresabo für {product_purchased}?,Open,Low,Email,,,2026-01-05T09:00:00
+DEMO-002,Ben Muster,ben@example.com,API Gateway,Cancellation request,Vertrag kündigen,Bitte kündigen Sie meinen Vertrag zum nächstmöglichen Zeitpunkt.,Open,High,Phone,,,2026-01-03T08:30:00
+DEMO-003,Clara Test,clara@example.com,Secure VPN,Technical issue,Verbindung fällt aus,Die VPN-Verbindung wird seit gestern regelmäßig getrennt.,Open,Critical,Chat,,,2026-01-02T12:00:00
+DEMO-004,David Demo,david@example.com,Analytics Plus,Refund request,Erstattung prüfen,Ich bitte um Prüfung einer Erstattung für die letzte Rechnung.,Open,Medium,Email,,,2026-01-04T15:00:00
+DEMO-005,Emilia Beispiel,emilia@example.com,Billing Suite,Billing inquiry,Frage zur Rechnung,Bitte erläutern Sie die Positionen auf meiner letzten Rechnung.,Pending Customer Response,Medium,Web,,,2026-01-06T10:00:00

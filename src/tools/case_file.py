@@ -3,8 +3,8 @@ Company-style case file output for support agent runs.
 Separates internal operational report from customer-facing draft.
 """
 
-from datetime import datetime
 import uuid
+from datetime import datetime
 
 
 def new_run_id() -> str:
@@ -38,7 +38,7 @@ def build_case_file(
     run_id: str,
     result: dict,
     workflow_trace: list[str],
-    execution_result: str,
+    finalization_result: str,
 ) -> dict:
     """Build structured case file from final workflow state."""
     ticket = result.get("ticket") or {}
@@ -52,6 +52,8 @@ def build_case_file(
         "rejection_reason": action.get("rejection_reason"),
         "business_reason": action.get("business_reason"),
         "risk_level": action.get("risk_level", "low"),
+        "decision_source": action.get("decision_source", "deterministic_policy"),
+        "policy_rules": action.get("policy_rules", []),
     }
 
     return {
@@ -82,7 +84,7 @@ def build_case_file(
         },
         "policy_review": policy_review,
         "approval_status": result.get("approval", "pending"),
-        "execution_result": execution_result,
+        "finalization_result": finalization_result,
         "customer_draft": action.get("customer_message", ""),
         "completed_at": datetime.now().isoformat(timespec="seconds"),
     }
@@ -147,14 +149,16 @@ def format_case_file(case: dict) -> str:
         f" Rejection Reason: {policy.get('rejection_reason') or '-'}",
         f" Business Reason:  {policy.get('business_reason') or '-'}",
         f" Risk Level:       {policy.get('risk_level', '-')}",
+        f" Decision Source:  {policy.get('decision_source', '-')}",
+        f" Policy Rules:     {', '.join(policy.get('policy_rules', [])) or '-'}",
         "",
         " APPROVAL STATUS",
         "-" * 70,
         f" Status:           {case['approval_status']}",
         "",
-        " EXECUTION RESULT",
+        " FINALIZATION RESULT",
         "-" * 70,
-        f" Result:           {case['execution_result']}",
+        f" Result:           {case['finalization_result']}",
         "",
         " CUSTOMER DRAFT",
         "-" * 70,
@@ -173,6 +177,10 @@ def customer_draft_is_clean(customer_draft: str) -> bool:
         "risk_level",
         "auto_approved",
         "needs_approval",
+        "richtlinie",
+        "risikostufe",
+        "freigabe erforderlich",
+        "ki-modell",
     )
     lower = customer_draft.lower()
     return not any(word in lower for word in forbidden)

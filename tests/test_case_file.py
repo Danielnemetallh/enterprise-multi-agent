@@ -38,8 +38,8 @@ class TestCaseFile:
         case = build_case_file(
             run_id="RUN-TEST-001",
             result=result,
-            workflow_trace=["Triage -> product_inquiry (metadata)", "Execute -> completed"],
-            execution_result="Ticket #1 processed successfully",
+            workflow_trace=["Triage -> product_inquiry (metadata)", "Finalization -> completed"],
+            finalization_result="Ticket #1 finalized locally",
         )
 
         assert case["run_id"] == "RUN-TEST-001"
@@ -59,3 +59,4 @@ class TestCaseFile:
     def test_customer_draft_is_clean(self):
         assert customer_draft_is_clean("Thank you for your request.") is True
         assert customer_draft_is_clean("This action requires_approval.") is False
+        assert customer_draft_is_clean("Diese Richtlinie erfordert eine Freigabe.") is False

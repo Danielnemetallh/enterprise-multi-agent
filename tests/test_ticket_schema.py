@@ -14,9 +14,9 @@ class TestNormalization:
         assert category == "cancellation_request"
         assert raw == "Cancellation request"
 
-    def test_unknown_category_defaults_to_product_inquiry(self):
+    def test_unknown_category_is_preserved_without_guessing(self):
         category, raw = normalize_category("Account setup")
-        assert category == "product_inquiry"
+        assert category == "unknown"
         assert raw == "Account setup"
 
     def test_status_mapping(self):

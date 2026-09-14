@@ -16,7 +16,7 @@ def base_state():
         proposed_action={},
         approval="pending",
         workflow_trace=[],
-        execution_result="",
+        finalization_result="",
     )
 
 
@@ -35,7 +35,7 @@ class TestNeedsApproval:
             "rejected": True,
             "requires_approval": True,
         }
-        assert needs_approval(base_state) == "execute_action"
+        assert needs_approval(base_state) == "finalize_action"
 
     def test_low_risk_action_auto_executes(self, base_state):
         base_state["proposed_action"] = {
@@ -43,8 +43,8 @@ class TestNeedsApproval:
             "discount_percent": 0,
             "requires_approval": False,
         }
-        assert needs_approval(base_state) == "execute_action"
+        assert needs_approval(base_state) == "finalize_action"
 
     def test_empty_action_dict(self, base_state):
         base_state["proposed_action"] = {}
-        assert needs_approval(base_state) == "execute_action"
+        assert needs_approval(base_state) == "finalize_action"

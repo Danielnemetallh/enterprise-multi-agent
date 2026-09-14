@@ -75,3 +75,27 @@ class TestPolicy:
         assert "action_type" in result
         assert "customer_message" in result
         assert "risk_level" in result
+
+    def test_policy_overrides_model_provided_risk(self):
+        action = {
+            "action_type": "process_cancellation",
+            "discount_percent": 0,
+            "customer_message": "Wir bearbeiten Ihre Kündigungsanfrage.",
+            "risk_level": "low",
+        }
+        result = evaluate_policy(action, "cancellation_request", _ticket())
+        assert result["risk_level"] == "high"
+        assert result["decision_source"] == "deterministic_policy"
+
+    def test_malformed_discount_is_rejected(self):
+        result = evaluate_policy(
+            {
+                "action_type": "offer_discount",
+                "discount_percent": float("inf"),
+                "customer_message": "Wir prüfen Ihre Anfrage.",
+            },
+            "refund_request",
+            _ticket(),
+        )
+        assert result["rejected"] is True
+        assert result["policy_outcome"] == "rejected"
