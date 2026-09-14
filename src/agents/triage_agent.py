@@ -38,7 +38,7 @@ def classify_ticket(subject: str, description: str) -> str:
     )
     result = call_llm_safe(prompt, temperature=0.0)
     if not result:
-        raise ProviderFailure("DeepSeek did not return a triage classification")
+        raise ProviderFailure("Configured model provider did not return a triage classification")
 
     result = result.strip().lower().rstrip(".")
 

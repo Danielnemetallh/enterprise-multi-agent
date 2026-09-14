@@ -1,6 +1,6 @@
 # SupportFlow
 
-LangGraph workflow: **Triage → Resolution → Policy → (HITL) → Finalize**. DeepSeek is accessed through `src/tools/llm.py`; SQLite stores tickets, checkpoints, runs, and reviews in `data/support_tickets.db`.
+LangGraph workflow: **Triage → Resolution → Policy → (HITL) → Finalize**. An OpenAI-compatible model provider or the explicit deterministic demo provider is accessed through `src/tools/llm.py`; SQLite stores tickets, checkpoints, runs, and reviews in `data/support_tickets.db`.
 
 ## Dev commands
 
@@ -43,7 +43,7 @@ data/synthetic_support_tickets.csv
 - Run all commands from the repository root; imports use `src.*`.
 - Use Python 3.12 and `requirements.txt`.
 - Keep customer-facing output German and code/policy identifiers English.
-- Never commit `.env`; tests must not require live DeepSeek credentials.
+- Never commit `.env`; tests must not require live model-provider credentials.
 - No real email, refund, cancellation, or CRM action is executed.
 - Deterministic code owns risk and approval decisions.
 - Failed and rejected tickets remain open.

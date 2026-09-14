@@ -12,7 +12,7 @@ class ProposalValidationError(ValueError):
 
 
 class ProviderFailure(RuntimeError):
-    """Raised when DeepSeek cannot provide a required model response."""
+    """Raised when the configured model provider cannot respond safely."""
 
 
 class ResolutionProposal(BaseModel):

@@ -77,7 +77,7 @@ def run_executive(classification: str, collected_data: dict) -> dict:
 
     result = call_llm_safe(prompt, temperature=0.0)
     if not result:
-        raise ProviderFailure("DeepSeek did not return a resolution proposal")
+        raise ProviderFailure("Configured model provider did not return a resolution proposal")
 
     try:
         action = parse_resolution_proposal(result)

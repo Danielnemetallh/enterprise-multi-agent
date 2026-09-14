@@ -15,7 +15,7 @@ from src.services.support_operations import (
 )
 from src.tools import db_tools
 from src.tools.import_tickets import import_tickets_from_csv
-from src.tools.llm import call_llm_safe
+from src.tools.llm import call_llm_safe, get_llm_config
 
 PROJECT_ROOT = os.path.dirname(os.path.abspath(__file__))
 SYNTHETIC_CSV = os.path.join(PROJECT_ROOT, "data", "synthetic_support_tickets.csv")
@@ -52,23 +52,32 @@ def _build_parser() -> argparse.ArgumentParser:
     show.add_argument("--run", required=True, dest="run_id")
 
     doctor = commands.add_parser("doctor", help="Lokale Konfiguration prüfen")
-    doctor.add_argument("--live", action="store_true", help="Expliziten DeepSeek-Smoke-Test ausführen")
+    doctor.add_argument("--live", action="store_true", help="Expliziten Modell-Smoke-Test ausführen")
     return parser
 
 
 def _doctor(live: bool) -> int:
     db_tools.ensure_db()
+    llm_config = get_llm_config()
     result = {
         "python": sys.version.split()[0],
         "database": db_tools.DB_PATH,
         "database_ready": os.path.exists(db_tools.DB_PATH),
-        "deepseek_key_configured": bool(os.getenv("DEEPSEEK_API_KEY")),
+        "provider": llm_config.provider or "OpenAI-kompatibel",
+        "model": llm_config.model,
+        "llm_configured": llm_config.is_configured,
+        "demo_mode": llm_config.demo_mode,
         "live_check": "not_requested",
     }
     if live:
-        result["live_check"] = "ok" if call_llm_safe("Antworte ausschließlich mit OK.") else "failed"
+        if llm_config.demo_mode:
+            result["live_check"] = "skipped_demo"
+        elif not llm_config.is_configured:
+            result["live_check"] = "not_configured"
+        else:
+            result["live_check"] = "ok" if call_llm_safe("Antworte ausschließlich mit OK.") else "failed"
     _print_json(result)
-    return 0 if result["live_check"] != "failed" else 1
+    return 0 if result["live_check"] not in {"failed", "not_configured"} else 1
 
 
 def main(argv: list[str] | None = None) -> int:

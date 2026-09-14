@@ -18,7 +18,7 @@ from src.services.support_operations import (
 )
 from src.tools import db_tools
 from src.tools.import_tickets import import_tickets_from_csv
-
+from src.tools.llm import get_llm_config
 
 PROJECT_ROOT = Path(__file__).resolve().parent
 DEMO_CSV = PROJECT_ROOT / "data" / "synthetic_support_tickets.csv"
@@ -290,10 +290,23 @@ def render_sidebar(queue: list[dict], pending: list[dict]) -> None:
         unsafe_allow_html=True,
     )
     st.sidebar.markdown('<div class="section-spacer"></div>', unsafe_allow_html=True)
-    provider_status = "konfiguriert" if os.getenv("DEEPSEEK_API_KEY") else "nicht konfiguriert"
-    provider_color = "var(--sf-lime)" if os.getenv("DEEPSEEK_API_KEY") else "var(--sf-amber)"
+    llm_config = get_llm_config()
+    if llm_config.demo_mode:
+        provider_label = "Interview-Demo"
+        provider_name = "deterministisch"
+        model_name = "lokal, kein Modellaufruf"
+        provider_status = "aktiv"
+        provider_color = "var(--sf-lime)"
+    else:
+        provider_label = "Modellanbieter"
+        provider_name = llm_config.provider or "OpenAI-kompatibel"
+        model_name = llm_config.model or "nicht angegeben"
+        provider_status = "konfiguriert" if llm_config.is_configured else "nicht konfiguriert"
+        provider_color = "var(--sf-lime)" if llm_config.is_configured else "var(--sf-amber)"
     st.sidebar.markdown(
-        f'<div class="key-row"><span>DeepSeek-Anbieter</span><span style="color:{provider_color}">{provider_status}</span></div>',
+        f'<div class="key-row"><span>{provider_label}</span><span style="color:{provider_color}">{provider_status}</span></div>'
+        f'<div class="key-row"><span>Profil</span><span>{safe_text(provider_name)}</span></div>'
+        f'<div class="key-row"><span>Modell</span><span>{safe_text(model_name)}</span></div>',
         unsafe_allow_html=True,
     )
 
@@ -429,7 +442,18 @@ def render_proposal_and_policy(run: dict | None) -> None:
     action = state.get("proposed_action") or {}
     is_policy_rejection = bool(action.get("rejected"))
     if run.get("status") == "failed" and not is_policy_rejection:
-        st.error("Dieser Workflow-Lauf ist fehlgeschlagen, bevor eine Fallakte gespeichert werden konnte. Details stehen in den lokalen Logs.")
+        error_message = str(run.get("error_message") or "")
+        if "configuration" in error_message.lower():
+            st.error(
+                "Der Modellanbieter ist nicht vollständig konfiguriert. Setze "
+                "LLM_API_KEY, LLM_BASE_URL und LLM_MODEL oder aktiviere "
+                "SUPPORTFLOW_DEMO_MODE=true."
+            )
+        else:
+            st.error(
+                "Dieser Workflow-Lauf ist fehlgeschlagen, bevor eine Fallakte "
+                "gespeichert werden konnte. Der Fehlerstatus bleibt im Lauf erhalten."
+            )
         return
     case_file = run.get("case_file") or {}
     policy = case_file.get("policy_review") or {}
