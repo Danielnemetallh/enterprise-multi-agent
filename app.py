@@ -274,7 +274,7 @@ def render_sidebar(queue: list[dict], pending: list[dict]) -> None:
     )
     st.sidebar.markdown('<div class="section-spacer"></div>', unsafe_allow_html=True)
     st.sidebar.markdown('<div class="eyebrow">Demo-Steuerung</div>', unsafe_allow_html=True)
-    if st.sidebar.button("Demo-Ticketwarteschlange laden", use_container_width=True):
+    if st.sidebar.button("Demo-Ticketwarteschlange laden", width="stretch"):
         loaded = seed_demo_dataset()
         st.session_state["notice"] = (
             "Demo-Tickets aus dem CSV-Datensatz geladen."
@@ -282,7 +282,7 @@ def render_sidebar(queue: list[dict], pending: list[dict]) -> None:
             else "Der Demo-Datensatz ist bereits geladen; es wurden keine Duplikate erstellt."
         )
         st.rerun()
-    if st.sidebar.button("Arbeitsbereich aktualisieren", use_container_width=True, type="secondary"):
+    if st.sidebar.button("Arbeitsbereich aktualisieren", width="stretch", type="secondary"):
         st.rerun()
     st.sidebar.markdown('<div class="section-spacer"></div>', unsafe_allow_html=True)
     st.sidebar.markdown(
@@ -349,7 +349,7 @@ def render_queue(queue: list[dict]) -> int | None:
         }
         for ticket in queue
     ]
-    st.dataframe(rows, use_container_width=True, hide_index=True, height=min(390, 92 + len(rows) * 48))
+    st.dataframe(rows, width="stretch", hide_index=True, height=min(390, 92 + len(rows) * 48))
     ticket_labels = {
         ticket["id"]: f'{ticket["ticket_id"]} · {ticket["subject"]}' for ticket in queue
     }
@@ -426,7 +426,7 @@ def render_ticket_detail(ticket: dict | None, run: dict | None) -> None:
     st.markdown('<div class="small-note">Kundennachricht</div>', unsafe_allow_html=True)
     st.markdown(f'<div class="proposal-copy">{safe_text(ticket.get("description"))}</div>', unsafe_allow_html=True)
     if run is None:
-        if st.button("Agenten für dieses Ticket starten", use_container_width=True):
+        if st.button("Agenten für dieses Ticket starten", width="stretch"):
             st.session_state["run_result"] = start_ticket_run(int(ticket["id"]))
             st.rerun()
     else:
@@ -507,8 +507,8 @@ def render_review_panel(run: dict | None) -> None:
             height=130,
         )
         approve, reject = st.columns(2)
-        approve_clicked = approve.form_submit_button("Freigeben & abschließen", use_container_width=True)
-        reject_clicked = reject.form_submit_button("Vorschlag ablehnen", use_container_width=True)
+        approve_clicked = approve.form_submit_button("Freigeben & abschließen", width="stretch")
+        reject_clicked = reject.form_submit_button("Vorschlag ablehnen", width="stretch")
     if not (approve_clicked or reject_clicked):
         return
     decision = "approve" if approve_clicked else "reject"
